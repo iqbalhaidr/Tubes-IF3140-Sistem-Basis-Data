@@ -1,0 +1,79 @@
+# Cara Menggunakan:
+# 1. Install ekstensi 'clang-format' di IDE Anda.
+# 2. IDE akan otomatis menggunakan file ini untuk memformat kode Anda.
+# 3. Atau jalankan manual: `clang-format -i -style=file src/nama_file.cpp`
+
+Language: Cpp
+BasedOnStyle: Google
+
+# 1. Indentasi & Spasi
+
+# Gunakan 4 spasi untuk indentasi (Google default-nya 2).
+IndentWidth: 4
+ContinuationIndentWidth: 4
+
+# Jangan pernah gunakan Tab, selalu gunakan spasi.
+UseTab: Never
+
+# Beri indentasi pada konten di dalam namespace.
+#
+# (salah):
+# namespace mdbms {
+# class MyClass {...};
+# }
+#
+# (benar):
+# namespace mdbms {
+#   class MyClass {...};
+# }
+IndentNamespaces: true
+
+# 2. Batas Kolom & Pembungkusan Baris (Line Wrapping)
+
+# Batas 100 karakter per baris (Google default-nya 80, terlalu pendek).
+ColumnLimit: 100
+
+# 3. Kurung Kurawal (Braces)
+
+# Gunakan gaya 'Attach' (kurung kurawal di baris yang sama).
+# Ini adalah standar Google default.
+#
+# void func() {
+#   ...
+# }
+#
+BreakBeforeBraces: Attach
+
+# Jangan izinkan fungsi singkat dalam satu baris.
+AllowShortFunctionsOnASingleLine: None
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: Never
+
+# 4. Pointer
+
+# Posisikan '*' menempel pada tipe data (Google default).
+#
+# (Left - Pilihan kita):
+#   int* p;
+#
+# (Right):
+#   int *p;
+PointerAlignment: Left
+
+# 5. Pengurutan Include Headers
+
+# Ini sangat penting untuk tugas besar agar tidak ada merge conflict.
+SortIncludes: true
+
+# Tentukan urutan #include.
+# 1. Header C/C++ (misal: <vector>, <string>, <cassert>)
+# 2. Header global tugas kita ("types.h")
+# 3. Header komponen tugas lainnya
+IncludeBlocks: Regroup
+IncludeCategories:
+  - Regex: '^<.*>'
+    Priority: 1 # C/C++ System Headers
+  - Regex: '^"types\.h"$'
+    Priority: 2 # Header Tipe Data Global kita
+  - Regex: '.*'
+    Priority: 3 # Header bagian lainnya (e.g., "query_processor.h")

@@ -1,0 +1,25 @@
+# File kompilasi CMake
+/build/
+*.cmake
+CMakeCache.txt
+CMakeFiles/
+Makefile
+cmake_install.cmake
+
+# File output
+*.out
+*.exe
+*.a
+*.so
+*.lib
+*.dll
+
+# File data & log
+/data/*.dat
+/data/*.log
+
+# File IDE
+.vscode/
+.idea/
+*.suo
+*.user

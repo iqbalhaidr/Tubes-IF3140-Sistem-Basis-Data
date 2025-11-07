@@ -5,7 +5,7 @@
 Kita menggunakan alur kerja seperti biasanya yaitu menggunakan Pull Request (PR).
 
 * **Branch `main`:**
-    * Branch ini adalah "versi utama" dari proyek kita.
+    * Branch ini adalah "versi utama" dari tugas besar kita.
     * Kode di `main` **HARUS SELALU** dalam keadaan *stable*, bisa di-*build* (`cmake .. && make`), dan lulus semua *unit test* (jika ada).
     * **ATURAN KERAS:** **DILARANG** melakukan `push` langsung ke `main`. Branch ini tidak benar-benar dilindungi jadi mohon berhati-hati.
 
