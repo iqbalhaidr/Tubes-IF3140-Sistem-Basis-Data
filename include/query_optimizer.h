@@ -1,15 +1,7 @@
 #pragma once
-#include <string>
-
-// Definisikan ParsedQuery di sini atau di types.h jika dipakai bersama
+#include "parsed_query.h"
 
 namespace mdbms::qo {
-
-// Struct sementara untuk ParsedQuery
-struct ParsedQuery {
-    std::string query;
-    // ... detail lain (misal: query tree)
-};
 
 class OptimizationEngine {
 public:

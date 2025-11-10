@@ -17,3 +17,11 @@ target_link_libraries(mdbms_client
     ccm_lib
     fr_lib
 )
+
+
+# execute test_query_optimizer
+add_executable(test_query_optimizer
+    ${CMAKE_SOURCE_DIR}/tests/test_query_optimizer.cpp
+)
+
+target_link_libraries(test_query_optimizer qo_lib)
