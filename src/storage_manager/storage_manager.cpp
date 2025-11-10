@@ -167,8 +167,17 @@ int StorageEngine::delete_block(const DataDeletion& deletion) {
     infile.close();
     outfile.close();
 
-    std::remove(filename.c_str());
-    std::rename(temp_filename.c_str(), filename.c_str());
+    // Remove dan rename serta cek error pada operasi file system
+    if (std::remove(filename.c_str()) != 0) {
+        std::cerr << "SM: Gagal menghapus file asli: " << filename << std::endl;
+        // Jika gagal, hapus file temp agar tidak tertinggal
+        std::remove(temp_filename.c_str());
+        return -1;
+    }
+    if (std::rename(temp_filename.c_str(), filename.c_str()) != 0) {
+        std::cerr << "SM: Gagal mengganti nama file temp: " << temp_filename << std::endl;
+        return -1;
+    }
 
     return affected_rows;
 }
@@ -193,66 +202,97 @@ TableSchema StorageEngine::getSchema(const std::string& table) {
 }
 
 void StorageEngine::serialize_row(std::ostream& out, const RowData& row, const TableSchema& schema) {
-    // Implementasi serializer biner
     for (const auto& col : schema) {
         if (!row.count(col.name)) {
+            std::cerr << "SM: Kolom hilang saat serialisasi: " << col.name << std::endl;
             throw std::runtime_error("Kolom hilang saat serialisasi: " + col.name);
         }
-        
+
         const auto& value = row.at(col.name);
 
         try {
             if (col.type == DataType::INT) {
                 int32_t val = std::get<int>(value);
                 out.write(reinterpret_cast<const char*>(&val), sizeof(val));
-            } 
+                if (!out) {
+                    std::cerr << "SM: Error menulis INT ke file." << std::endl;
+                    throw std::runtime_error("Gagal menulis INT ke file");
+                }
+            }
             else if (col.type == DataType::FLOAT) {
                 float val = std::get<float>(value);
                 out.write(reinterpret_cast<const char*>(&val), sizeof(val));
-            } 
+                if (!out) {
+                    std::cerr << "SM: Error menulis FLOAT ke file." << std::endl;
+                    throw std::runtime_error("Gagal menulis FLOAT ke file");
+                }
+            }
             else if (col.type == DataType::STRING) {
                 const std::string& str = std::get<std::string>(value);
                 uint32_t len = static_cast<uint32_t>(str.length());
                 out.write(reinterpret_cast<const char*>(&len), sizeof(len)); // Tulis panjang string
+                if (!out) {
+                    std::cerr << "SM: Error menulis panjang string ke file." << std::endl;
+                    throw std::runtime_error("Gagal menulis panjang string ke file");
+                }
                 out.write(str.c_str(), len); // Tulis data string
+                if (!out) {
+                    std::cerr << "SM: Error menulis data string ke file." << std::endl;
+                    throw std::runtime_error("Gagal menulis data string ke file");
+                }
             }
         } catch (const std::bad_variant_access& e) {
+            std::cerr << "SM: Tipe data tidak cocok untuk kolom " << col.name << std::endl;
             throw std::runtime_error("Tipe data tidak cocok untuk kolom " + col.name);
         }
     }
 }
 
 RowData StorageEngine::deserialize_row(std::istream& in, const TableSchema& schema) {
-    // Implementasi deserializer biner
     RowData row;
     for (const auto& col : schema) {
-        if (in.eof() || in.peek() == EOF) return {};
+        if (in.eof() || in.peek() == EOF) {
+            std::cerr << "SM: EOF atau file korup saat deserialisasi kolom " << col.name << std::endl;
+            return {};
+        }
 
         try {
             if (col.type == DataType::INT) {
                 int32_t val;
                 in.read(reinterpret_cast<char*>(&val), sizeof(val));
-                if (in.gcount() != sizeof(val)) return {}; // file korup
+                if (in.gcount() != sizeof(val) || !in) {
+                    std::cerr << "SM: Error membaca INT pada kolom " << col.name << std::endl;
+                    return {};
+                }
                 row[col.name] = static_cast<int>(val);
-            } 
+            }
             else if (col.type == DataType::FLOAT) {
                 float val;
                 in.read(reinterpret_cast<char*>(&val), sizeof(val));
-                if (in.gcount() != sizeof(val)) return {}; // file korup
+                if (in.gcount() != sizeof(val) || !in) {
+                    std::cerr << "SM: Error membaca FLOAT pada kolom " << col.name << std::endl;
+                    return {};
+                }
                 row[col.name] = val;
-            } 
+            }
             else if (col.type == DataType::STRING) {
                 uint32_t len;
                 in.read(reinterpret_cast<char*>(&len), sizeof(len));
-                if (in.gcount() != sizeof(len)) return {}; // file korup
-
+                if (in.gcount() != sizeof(len) || !in) {
+                    std::cerr << "SM: Error membaca panjang string pada kolom " << col.name << std::endl;
+                    return {};
+                }
                 std::string str(len, '\0');
                 in.read(&str[0], len);
-                if (in.gcount() != len) return {}; // file korup
+                if (in.gcount() != len || !in) {
+                    std::cerr << "SM: Error membaca data string pada kolom " << col.name << std::endl;
+                    return {};
+                }
                 row[col.name] = str;
             }
         } catch (...) {
-             return {};
+            std::cerr << "SM: Exception saat deserialisasi kolom " << col.name << std::endl;
+            return {};
         }
     }
     return row;
