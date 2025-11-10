@@ -5,12 +5,6 @@
 
 namespace mdbms::qo {
 
-// Struct sementara untuk ParsedQuery
-struct ParsedQuery {
-    std::string query;
-    // ... detail lain (misal: query tree)
-};
-
 class OptimizationEngine {
 public:
     ParsedQuery parse_query(const std::string& query);
