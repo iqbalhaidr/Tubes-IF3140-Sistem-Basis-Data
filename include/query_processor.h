@@ -1,74 +1,60 @@
 #pragma once
-
-#include <string>
-#include <memory>
 #include "types.h"
 
-namespace mdbms::qo { class OptimizationEngine; }
+namespace mdbms::qo { class OptimizationEngine; struct ParsedQuery; struct QueryTree; }
 namespace mdbms::sm { class StorageEngine; }
 namespace mdbms::ccm { class ConcurrencyControlManager; }
 namespace mdbms::fr { class FailureRecoveryManager; }
 
 namespace mdbms::qp {
 
-using QueryTreePtr = std::shared_ptr<QueryTree>;
-
 class QueryProcessor {
 public:
-    QueryProcessor(
-        qo::OptimizationEngine& qo,
-        sm::StorageEngine& sm,
-        ccm::ConcurrencyControlManager& ccm,
-        fr::FailureRecoveryManager& frm
-    );
+    QueryProcessor();
 
+    /**
+    * Todo:
+     * 1. Parse dan optimize query melalui Query Optimizer
+     * 2. Identifikasi jenis operasi (SELECT, UPDATE, INSERT, DELETE, dll)
+     * 3. Untuk operasi data (read/write):
+     *    - Minta izin dari Concurrency Control Manager
+     *    - Tunggu hingga response diterima (blocking)
+     *    - Jika tidak diizinkan (deadlock/conflict), batalkan transaksi
+     * 4. Eksekusi operasi melalui Storage Manager:
+     *    - SELECT: ambil data dengan read_block()
+     *    - UPDATE/DELETE: modifikasi data dengan write_block()/delete_block()
+     *    - JOIN: lakukan algoritma join sesuai query plan
+     * 5. Log operasi ke Failure Recovery Manager
+     * 6. Kembalikan hasil dalam bentuk ExecutionResult
+    */
     ExecutionResult execute_query(const std::string& query);
 
+    // Memanggil Concurrency Control Manager untuk mendapatkan transaction ID dan Failure Recovery Manager untuk mencatat BEGIN.
+    int begin_transaction(); 
+
+    // Menyelesaikan transaksi dengan sukses. Semua perubahan akan di-commit ke disk melalui Failure Recovery Manager.
+    bool commit_transaction(int transaction_id);
+
+    // Rollback semua perubahan yang dilakukan oleh transaksi. Meminta Failure Recovery Manager untuk melakukan UNDO.
+    bool abort_transaction(int transaction_id);
+
+    // Method tiap query
+    Rows<Row> execute_select(const mdbms::qo::ParsedQuery& parsed_query, int transaction_id);
+    int execute_update(const mdbms::qo::ParsedQuery& parsed_query, int transaction_id);
+    int execute_insert(const mdbms::qo::ParsedQuery& parsed_query, int transaction_id);
+    int execute_delete(const mdbms::qo::ParsedQuery& parsed_query, int transaction_id);
+    Rows<Row> execute_join(const Rows<Row>& left_table, const Rows<Row>& right_table, const Condition& join_condition, const std::string& join_type);
+    Rows<Row> apply_where_clause(const Rows<Row>& rows,const std::vector<Condition>& conditions);
+    Rows<Row> apply_order_by(const Rows<Row>& rows, const std::string& column, bool ascending);
 private:
-    qo::OptimizationEngine& qo_engine_;
-    sm::StorageEngine& sm_engine_;
-    ccm::ConcurrencyControlManager& ccm_manager_;
-    fr::FailureRecoveryManager& frm_manager_;
+    std::shared_ptr<mdbms::qo::OptimizationEngine> qo_engine;
+    std::shared_ptr<mdbms::sm::StorageEngine> sm_engine;
+    std::shared_ptr<mdbms::ccm::ConcurrencyControlManager> ccm_manager;
+    std::shared_ptr<mdbms::fr::FailureRecoveryManager> frm_manager;
 
-    ExecutionResult execute_plan(const ParsedQuery& plan, int transaction_id);
+    int current_transaction_id;
 
-    ExecutionResult handle_select(QueryTreePtr select_node, int tx_id);
-    
-    ExecutionResult handle_update(QueryTreePtr update_node, int tx_id);
-
-    ExecutionResult handle_join(QueryTreePtr join_node, int tx_id);
-
-    ExecutionResult handle_delete(QueryTreePtr delete_node, int tx_id);
-
-    ExecutionResult handle_insert(QueryTreePtr insert_node, int tx_id);
-
-    ExecutionResult handle_create(QueryTreePtr create_node, int tx_id);
-
-    ExecutionResult handle_drop(QueryTreePtr drop_node, int tx_id);
-
-    std::vector<Condition> parse_conditions_from_tree(QueryTreePtr where_node);
-
-    void apply_projection(Rows& rows, QueryTreePtr column_list_node);
-
-    void apply_order_by(Rows& rows, QueryTreePtr order_by_node);
-
-    // Helper methods for extracting information from query tree
-    std::vector<std::string> extract_columns_from_list(QueryTreePtr column_list_node);
-    
-    std::string extract_query_action(QueryTreePtr query_tree);
-    
-    std::any convert_operand(const std::string& value, const std::string& type = "string");
-    
-    std::any evaluate_expression(QueryTreePtr expr_node, const std::vector<std::any>& row, 
-                                  const std::vector<std::string>& column_names);
-    
-    int find_column_index(const std::string& column_name, const std::vector<std::string>& column_names);
-    
-    Rows perform_cartesian_product(const Rows& left, const Rows& right,
-                                   const std::vector<std::string>& left_cols,
-                                   const std::vector<std::string>& right_cols);
-
-    bool compare_values(const std::any& left, const std::any& right, const std::string& op);
+    std::string parse_query_type(const std::string& query);
 };
 
 } // namespace mdbms::qp
