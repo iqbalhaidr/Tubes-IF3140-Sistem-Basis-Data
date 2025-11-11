@@ -2,6 +2,8 @@
 add_library(qo_lib STATIC
     query_optimizer.cpp
     parser/sql_parser.cpp
+    parser/plan_segments.cpp
+    parser/string_utils.cpp
     tree/plan_tree.cpp
     optimizer/optimizer_rules.cpp
     optimizer/plan_generator.cpp

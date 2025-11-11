@@ -2,15 +2,10 @@
 
 namespace mdbms::qo {
 
-std::unique_ptr<QueryTree> plan_tree(const ParsedQuery& pq)
-{
-    auto root = std::make_unique<QueryTree>("PROJECT", "cols");
+QueryTreePtr plan_tree(const PlanSegments& segments) {
+    // TODO: bikin query_tree dari segment yang telah dibuat
 
-    QueryTree* curr = root->add_child(
-        std::make_unique<QueryTree>("SCAN", pq.from_tables[0])
-    );
-
-    return root;
+    return nullptr;
 }
 
-}
+} // namespace mdbms::qo

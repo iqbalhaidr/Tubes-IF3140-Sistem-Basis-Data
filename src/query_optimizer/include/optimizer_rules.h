@@ -1,20 +1,19 @@
 #pragma once
-#include <memory>
+
 #include "query_tree.h"
 
 namespace mdbms::qo {
 
 // Aturan 1 – Split conjunctive selections
-std::unique_ptr<QueryTree> splitting_conjunction(const QueryTree&);
+QueryTreePtr splitting_conjunction(const QueryTreePtr& plan);
 
 // Aturan 2 – Pushdown selection
-std::unique_ptr<QueryTree> pushdown_selection(const QueryTree&);
+QueryTreePtr pushdown_selection(const QueryTreePtr& plan);
 
 // Aturan 3 – Redundant projection
-std::unique_ptr<QueryTree> redundant_projection(const QueryTree&);
-
+QueryTreePtr redundant_projection(const QueryTreePtr& plan);
 
 // Semua Rules
-std::unique_ptr<QueryTree> apply_optimizer_rules(const QueryTree&);
+QueryTreePtr apply_optimizer_rules(const QueryTreePtr& plan);
 
 }
