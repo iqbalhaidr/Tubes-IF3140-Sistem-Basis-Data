@@ -115,9 +115,8 @@ struct DataWrite {
     std::vector<std::string> columns;       // Kolom yang akan di-update (untuk UPDATE)
     std::vector<Condition> conditions;      // Kondisi WHERE (untuk UPDATE)
     T new_value;                           // Nilai baru (Row untuk INSERT, nilai untuk UPDATE)
-    bool is_insert;                        // true = INSERT, false = UPDATE
 
-    DataWrite() : is_insert(false) {}
+    DataWrite(){}
 };
 
 struct DataDeletion {
