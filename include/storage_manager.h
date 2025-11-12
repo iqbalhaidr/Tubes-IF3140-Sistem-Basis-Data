@@ -9,22 +9,16 @@ class StorageEngine {
 public:
     // Constructor
     StorageEngine(const std::string& data_dir);
-
-    Rows read_block(const DataRetrieval& retrieval);
-    int write_block(const DataWrite& write);
+    Rows<Row> read_block(const DataRetrieval& retrieval);
+    int write_block(const DataWrite<Row>& write);
     int delete_block(const DataDeletion& deletion);
 
 private:
     std::string data_dir_;
-
-    // Mengambil skema tabel
     TableSchema getSchema(const std::string& table);
-
-    void serialize_row(std::ostream& out, const RowData& row, const TableSchema& schema);
-
-    RowData deserialize_row(std::istream& in, const TableSchema& schema);
-
-    bool check_conditions(const RowData& row, const std::vector<Condition>& conditions);
+    void serialize_row(std::ostream& out, const Row& row, const TableSchema& schema);
+    Row deserialize_row(std::istream& in, const TableSchema& schema);
+    bool check_conditions(const Row& row, const std::vector<Condition>& conditions);
 };
 
 } // namespace mdbms::sm
