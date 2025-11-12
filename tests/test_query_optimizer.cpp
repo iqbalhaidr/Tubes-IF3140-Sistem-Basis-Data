@@ -33,7 +33,7 @@ int main() {
     }
     std::cout << "\nJOIN pairs: ";
     for (const auto& join : parsed_query.join_pairs) {
-        std::cout << '(' << join.first << " = " << join.second << ") ";
+        std::cout << '(' << join.first << "," << join.second << ") ";
     }
     std::cout << "\nWHERE clauses: ";
     for (const auto& condition : parsed_query.where_conditions) {
