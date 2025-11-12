@@ -3,131 +3,181 @@
 #include <string>
 #include <vector>
 #include <any>
-#include <memory> // Untuk shared_ptr / weak_ptr
-#include <variant> // Untuk operand
+#include <map>
 
 namespace mdbms {
 
-// --- Tipe Dasar (Dari Spesifikasi Query Processor & Storage Manager) ---
-
-// Row type definition
-using Row = std::vector<std::any>;
-
-// Enum for action types in concurrency control
 enum class Action {
-    READ,
+    READ,   
     WRITE
 };
 
-// Enum for concurrency control response
-enum class Response {
-    ALLOW,
-    DENY
+enum class TransactionStatus {
+    ACTIVE,               
+    PARTIALLY_COMMITTED,  
+    COMMITTED,           
+    FAILED,              
+    ABORTED,            
+    TERMINATED 
 };
 
-/**
- * @struct Condition
- * @brief Merepresentasikan satu kondisi di klausa WHERE (misal: 'harga > 1000')
- * @cite: 81
- */
-struct Condition {
-    std::string column;
-    std::string operation; // enum("=", "<>", ">", ">=", "<", "<=")
-    std::any operand; // Changed from variant to std::any for flexibility
+enum class IndexType {
+    BTREE, 
+    HASH 
 };
 
-/**
- * @struct Rows
- * @brief Merepresentasikan hasil data tabular.
- * @cite: 24
- */
+enum class SearchType {
+    LINEAR,     
+    INDEX_SCAN 
+};
+
+// Nanti sesuain sama kelompok storage manager
+enum class DataType {
+    INTEGER,   
+    FLOAT,  
+    CHAR,   
+    VARCHAR
+};
+
+struct Row {
+    std::string table_name;                    
+    std::map<std::string, std::any> columns; 
+    int row_id;                                
+
+    Row() : row_id(-1) {}
+};
+
+
+template<typename T = Row>
 struct Rows {
-    int rows_count;
-    // std::any bisa jadi sulit dikelola.
-    // Mari kita asumsikan (untuk implementasi ini)
-    // data adalah matriks dari std::any.
-    // vector<Row>, dimana Row = vector<std::any>
-    std::vector<std::vector<std::any>> data;
-    
-    // Anda juga perlu metadata kolom (nama, tipe) di sini
-    // std::vector<std::string> column_names;
+    std::vector<T> data;
+    int rows_count; 
+    std::vector<std::string> column_names;
+
+    Rows() : rows_count(0) {}
+
+    Rows(const std::vector<T>& rows) : data(rows), rows_count(rows.size()) {}
 };
 
-/**
- * @struct ExecutionResult
- * @brief Objek hasil standar yang dikembalikan oleh QP.
- * @cite: 24
- */
-struct ExecutionResult {
-    int transaction_id;
-    std::string message;
-    std::string query;
-    Rows data;
-    // 'timestamp' dihilangkan untuk kesederhanaan,
-    // sesuai implementasi stub Anda
+// struct ExecutionResult {
+//     int transaction_id;   
+//     std::time_t timestamp;
+//     std::string message;
+//     std::string query;
+//     Rows<Row> data;
+//     int affected_rows;
+//     bool success;
+
+//     ExecutionResult() : transaction_id(-1), timestamp(std::time(nullptr)), affected_rows(0), success(false) {}
+// };
+
+
+// Concurrency Control
+struct Response {
+    bool allowed;            
+    int transaction_id;       
+
+    Response() : allowed(false), transaction_id(-1) {}
+    Response(bool allow, int tid) : allowed(allow), transaction_id(tid) {}
 };
 
+// struct LockInfo {
+//     int transaction_id;         
+//     Action lock_type;           // Tipe lock (READ/WRITE)
+//     std::time_t timestamp;      // Waktu lock diberikan
 
-// --- Tipe Query Optimizer (Juga digunakan oleh QP) ---
+//     LockInfo() : transaction_id(-1), lock_type(Action::READ), timestamp(std::time(nullptr)) {}
+// };
 
-struct QueryTree; // Forward declaration
+// Storage Manager
+struct Condition {
+    std::string column;      
+    std::string operation;    
+    std::any operand;    
 
-/**
- * @struct QueryTree
- * @brief Node dalam pohon query plan.
- * @cite: 24, 53
- */
-struct QueryTree {
-    std::string type; // misal: "SELECT", "WHERE_CLAUSE", "COLUMN_LIST"
-    std::string value; // misal: "Student", "salary", ">"
-    std::vector<std::shared_ptr<QueryTree>> children;
-    std::weak_ptr<QueryTree> parent;
+    Condition() {}
+    Condition(const std::string& col, const std::string& op, const std::any& val) : column(col), operation(op), operand(val) {}
 };
 
-/**
- * @struct ParsedQuery
- * @brief Objek yang dikembalikan QO, berisi query plan.
- * @cite: 24, 53
- */
-struct ParsedQuery {
-    std::string query;
-    std::shared_ptr<QueryTree> query_tree;
-};
-
-
-// --- Tipe Storage Manager (Digunakan oleh QP untuk meminta data) ---
-
-/**
- * @struct DataRetrieval
- * @brief Permintaan untuk membaca data.
- * @cite: 81
- */
 struct DataRetrieval {
-    std::vector<std::string> tables;
-    std::vector<std::string> columns;
-    std::vector<Condition> conditions;
+    std::string table;                    
+    std::vector<std::string> columns;      
+    std::vector<Condition> conditions;    
+    SearchType search_type;                 
+    std::string index_column; // Kolom yang digunakan untuk index (jika ada)
+
+    DataRetrieval() : search_type(SearchType::LINEAR) {}
 };
 
-/**
- * @struct DataWrite
- * @brief Permintaan untuk menulis (memodifikasi/insert) data.
- * @cite: 81
- */
+template<typename T = Row>
 struct DataWrite {
-    std::string table;
-    std::vector<Condition> conditions; // Untuk mencari baris yang akan di-update
-    std::vector<std::string> columns_to_update;
-    std::vector<std::any> new_values; // Nilai baru
+    std::string table;                    
+    std::vector<std::string> columns;       // Kolom yang akan di-update (untuk UPDATE)
+    std::vector<Condition> conditions;      // Kondisi WHERE (untuk UPDATE)
+    T new_value;                           // Nilai baru (Row untuk INSERT, nilai untuk UPDATE)
+    bool is_insert;                        // true = INSERT, false = UPDATE
+
+    DataWrite() : is_insert(false) {}
 };
 
-/**
- * @struct DataDeletion
- * @brief Permintaan untuk menghapus data.
- * @cite: 81
- */
 struct DataDeletion {
-    std::string table;
+    std::string table;                    
     std::vector<Condition> conditions;
+
+    DataDeletion() {}
+    DataDeletion(const std::string& tbl) : table(tbl) {}
 };
+
+struct Statistic {
+    std::string table_name;      
+    int n_r;                                // Number of tuples in relation r
+    int b_r;                                // Number of blocks containing tuples of r
+    int l_r;                                // Size of tuple of r (bytes)
+    int f_r;                                // Blocking factor 
+    std::map<std::string, int> V_a_r;       // Distinct values untuk setiap atribut A
+
+    Statistic() : n_r(0), b_r(0), l_r(0), f_r(0) {}
+};
+
+struct TableSchema {
+    std::string table_name;                
+    std::vector<std::string> column_names; 
+    std::vector<DataType> column_types; 
+    std::vector<int> column_sizes;                    // Ukuran kolom (untuk CHAR/VARCHAR)
+    std::string primary_key;                          // Nama kolom primary key
+    std::map<std::string, std::string> foreign_keys;  // <kolom, tabel_referensi.kolom>
+
+    TableSchema() {}
+};
+
+// Failure Recovery
+// struct RecoverCriteria {
+//     std::time_t timestamp;      // Recovery hingga timestamp tertentu
+//     int transaction_id;         // Recovery untuk transaction ID tertentu 
+//     bool use_timestamp;         // true jika menggunakan timestamp, false jika menggunakan transaction_id
+
+//     RecoverCriteria() : timestamp(0), transaction_id(-1), use_timestamp(false) {}
+// };
+
+// struct LogEntry {
+//     int log_id;                 // ID unik log entry
+//     int transaction_id;         // ID transaksi
+//     std::time_t timestamp;      // Waktu log dibuat
+//     std::string operation;      // Jenis operasi: BEGIN, COMMIT, ABORT, UPDATE, INSERT, DELETE
+//     std::string table_name;     // Nama tabel yang terpengaruh
+//     Row old_value;             // Nilai lama (untuk UNDO)
+//     Row new_value;             // Nilai baru (untuk REDO)
+//     std::string query;          // Query yang dieksekusi
+
+//     LogEntry() : log_id(-1), transaction_id(-1), timestamp(std::time(nullptr)) {}
+// };
+
+// struct CheckpointInfo {
+//     int checkpoint_id;        
+//     std::time_t timestamp;      
+//     std::vector<int> active_transactions;  // Daftar transaksi yang aktif saat checkpoint
+
+//     CheckpointInfo() : checkpoint_id(-1), timestamp(std::time(nullptr)) {}
+// };
 
 } // namespace mdbms

@@ -1,4 +1,4 @@
-#include "cost_model.h"
+#include "query_optimizer.h"
 
 namespace mdbms::qo {
 namespace {
@@ -9,8 +9,8 @@ int count_nodes(const QueryTree* node) {
     }
 
     int sum = 1;
-    for (const auto& child : node->children) {
-        sum += count_nodes(child.get());
+    for (const auto* child : node->children) {
+        sum += count_nodes(child);
     }
     return sum;
 }

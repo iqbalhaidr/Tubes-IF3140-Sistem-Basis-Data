@@ -1,11 +1,10 @@
-#include "plan_tree.h"
+#include "query_optimizer.h"
 
 namespace mdbms::qo {
 
-QueryTreePtr plan_tree(const PlanSegments& segments) {
-    // TODO: bikin query_tree dari segment yang telah dibuat
-
-    return nullptr;
+QueryTree* plan_tree(const ParsedQuery& parsed) {
+    // TODO: bangun QueryTree langsung dari ParsedQuery (SELECT, JOIN, WHERE, dll).
+    return parsed.query_tree;
 }
 
 } // namespace mdbms::qo

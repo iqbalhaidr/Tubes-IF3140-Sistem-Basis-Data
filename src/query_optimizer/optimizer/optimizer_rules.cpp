@@ -1,35 +1,36 @@
-#include "optimizer_rules.h"
+#include "query_optimizer.h"
 
 namespace mdbms::qo {
+
 namespace {
 
+QueryTree* passthrough(QueryTree* plan) {
+    return plan;
+}
 
 } // namespace
 
-// ini buat contoh aja, sebenarnya bebas optimizer nya bentukan nya kea gimana,
-// yang penting dia bikin QueryTree yang optimal (optimized_tree)
-QueryTreePtr splitting_conjunction(const QueryTreePtr& plan) {
-
+QueryTree* splitting_conjunction(QueryTree* plan) {
+    return plan;
 }
 
-QueryTreePtr pushdown_selection(const QueryTreePtr& plan) {
-
+QueryTree* pushdown_selection(QueryTree* plan) {
+    return plan;
 }
 
-QueryTreePtr redundant_projection(const QueryTreePtr& plan) {
-
+QueryTree* redundant_projection(QueryTree* plan) {
+    return plan;
 }
 
-// ini nanti dia connect ke optimizer_rules yang ada di query_processor.cpp
-QueryTreePtr apply_optimizer_rules(const QueryTreePtr& plan) {
-    // if (!plan) {
-    //     return nullptr;
-    // }
-
-    // auto current_plan = splitting_conjunction(plan);
-    // current_plan = pushdown_selection(current_plan);
-    // current_plan = redundant_projection(current_plan);
-    // return current_plan;
+QueryTree* apply_optimizer_rules(QueryTree* plan) {
+    if (!plan) {
+        return nullptr;
+    }
+    // Placeholder pipeline; each stage currently no-ops.
+    plan = splitting_conjunction(plan);
+    plan = pushdown_selection(plan);
+    plan = redundant_projection(plan);
+    return passthrough(plan);
 }
 
 } // namespace mdbms::qo

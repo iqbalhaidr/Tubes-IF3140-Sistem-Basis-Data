@@ -7,7 +7,7 @@ namespace mdbms::sm {
 
 class StorageEngine {
 public:
-    Rows read_block(/* DataRetrieval retrieval */);
+    // Rows read_block(/* DataRetrieval retrieval */);
     int write_block(/* DataWrite write */);
     int delete_block(/* DataDeletion deletion */);
 };

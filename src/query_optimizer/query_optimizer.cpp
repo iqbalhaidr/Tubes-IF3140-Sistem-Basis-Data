@@ -1,25 +1,26 @@
 #include "query_optimizer.h"
-#include "plan_tree.h"
-#include "optimizer_rules.h"
-#include "sql_parser.h"
-#include <iostream>
 
 namespace mdbms::qo {
 
-ParsedQuery OptimizationEngine::parse_query(const std::string& query) {
-    ParsedQuery pq = parse_sql(query);
-    return pq;
+ParsedQuery sql_parser(const std::string& query); // yang punya internal
+
+OptimizationEngine::OptimizationEngine() = default;
+OptimizationEngine::~OptimizationEngine() = default;
+
+ParsedQuery OptimizationEngine::parse_query(const std::string& query) { // ini buat public
+    ParsedQuery parsed = ::mdbms::qo::sql_parser(query);
+
+    // TODO(#plan_tree): hubungkan builder QueryTree ke parsed.query_tree ketika sudah tersedia.
+    return parsed;
 }
 
 ParsedQuery OptimizationEngine::optimize_query(const ParsedQuery& query) {
-    std::cout << "QO: Optimizing query..." << std::endl;
-
     ParsedQuery optimized = query;
     if (!optimized.query_tree) {
-        std::cout << "QO: Tidak ada query tree yang bisa dioptimasi." << std::endl;
         return optimized;
     }
-    optimized.query_tree = apply_optimizer_rules(optimized.query_tree);
+
+    // TODO(#optimizer): gunakan optimizer_rules setelah QueryTree siap diproses.
     return optimized;
 }
 
