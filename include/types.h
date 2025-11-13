@@ -1,14 +1,10 @@
 #pragma once
 
 #include <any>
-#include <map>
-#include <any>
+#include <ctime>
 #include <map>
 #include <string>
 #include <vector>
-#include <ctime>
-#include <variant>
-#include <stdexcept>
 
 namespace mdbms {
 
@@ -151,6 +147,15 @@ struct TableSchema {
 };
 
 // Failure Recovery
+enum class Operation {
+    BEGIN,
+    COMMIT,
+    ABORT,
+    UPDATE,
+    INSERT,
+    DELETE
+};
+
 struct RecoverCriteria {
     std::time_t timestamp;
     int transaction_id;
@@ -163,7 +168,7 @@ struct LogEntry {
     int log_id;
     int transaction_id;
     std::time_t timestamp;
-    std::string operation;
+    Operation operation;
     std::string table_name;
     Row old_value;
     Row new_value;
