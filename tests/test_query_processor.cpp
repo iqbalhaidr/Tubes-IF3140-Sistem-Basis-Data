@@ -1,12 +1,14 @@
-#include "query_processor.h"
 #include "query_optimizer.h"
+#include "query_processor.h"
+#include "storage_manager.h"
 
 #include <iostream>
 #include <memory>
 
 int main() {
     auto optimizer = std::make_shared<mdbms::qo::OptimizationEngine>();
-    mdbms::qp::QueryProcessor query_processor(optimizer);
+    auto storage = std::make_shared<mdbms::sm::StorageEngine>("data");
+    mdbms::qp::QueryProcessor query_processor(optimizer, storage);
 
     const std::string query = "SELECT * FROM integration_test";
     const auto result = query_processor.execute_query(query);
@@ -30,6 +32,11 @@ int main() {
 
     if (result.message.find("Retrieved") == std::string::npos) {
         std::cerr << "[FAIL] Unexpected execution message: " << result.message << "\n";
+        passed = false;
+    }
+
+    if (result.data.rows_count != 0) {
+        std::cerr << "[FAIL] Expected no rows from empty storage but got " << result.data.rows_count << "\n";
         passed = false;
     }
 

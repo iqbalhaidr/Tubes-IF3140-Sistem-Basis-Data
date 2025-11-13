@@ -10,14 +10,19 @@
 
 namespace mdbms::qp {
 
-QueryProcessor::QueryProcessor(std::shared_ptr<mdbms::qo::OptimizationEngine> optimizer)
+QueryProcessor::QueryProcessor(std::shared_ptr<mdbms::qo::OptimizationEngine> optimizer,
+                               std::shared_ptr<mdbms::sm::StorageEngine> storage)
     : current_transaction_id(-1) {
     if (optimizer) {
         qo_engine = std::move(optimizer);
     } else {
         qo_engine = std::make_shared<mdbms::qo::OptimizationEngine>();
     }
-    sm_engine = std::make_shared<mdbms::sm::StorageEngine>();
+    if (storage) {
+        sm_engine = std::move(storage);
+    } else {
+        sm_engine = std::make_shared<mdbms::sm::StorageEngine>("data");
+    }
     ccm_manager = std::make_shared<mdbms::ccm::ConcurrencyControlManager>();
     frm_manager = std::make_shared<mdbms::fr::FailureRecoveryManager>();
 

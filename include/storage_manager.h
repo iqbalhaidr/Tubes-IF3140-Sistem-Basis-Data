@@ -1,16 +1,24 @@
 #pragma once
 #include "types.h"
+#include <string>
+#include <fstream>
 
 namespace mdbms::sm {
 
-    // Definisikan DataRetrieval, DataWrite, dll. di sini atau di types.h jika dipakai bersama
+class StorageEngine {
+public:
+    // Constructor
+    StorageEngine(const std::string& data_dir);
+    Rows<Row> read_block(const DataRetrieval& retrieval);
+    int write_block(const DataWrite<Row>& write);
+    int delete_block(const DataDeletion& deletion);
 
-    class StorageEngine {
-       public:
-        Rows<Row> read_block(const DataRetrieval& retrieval);
-        int write_block(const DataWrite<Row>& write);
-        int delete_block(const DataDeletion& deletion);
-        bool has_index(const std::string& table, const std::string& column);
-    };
+private:
+    std::string data_dir_;
+    TableSchema getSchema(const std::string& table);
+    void serialize_row(std::ostream& out, const Row& row, const TableSchema& schema);
+    Row deserialize_row(std::istream& in, const TableSchema& schema);
+    bool check_conditions(const Row& row, const std::vector<Condition>& conditions);
+};
 
-}  // namespace mdbms::sm
+} // namespace mdbms::sm

@@ -5,6 +5,8 @@
 #include <string>
 #include <vector>
 #include <ctime>
+#include <variant>
+#include <stdexcept>
 
 namespace mdbms {
 
