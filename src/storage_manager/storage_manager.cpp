@@ -13,6 +13,8 @@
 
 namespace mdbms::sm {
 
+StorageEngine::StorageEngine() : data_dir_("data") {}
+
 StorageEngine::StorageEngine(const std::string& data_dir) : data_dir_(data_dir) {}
 
 Rows<Row> StorageEngine::read_block(const DataRetrieval& retrieval) {

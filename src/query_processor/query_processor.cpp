@@ -12,7 +12,8 @@ namespace mdbms::qp {
 
 QueryProcessor::QueryProcessor(std::shared_ptr<mdbms::qo::OptimizationEngine> optimizer,
                                std::shared_ptr<mdbms::sm::StorageEngine> storage,
-                               std::shared_ptr<mdbms::ccm::ConcurrencyControlManager> concurrency)
+                               std::shared_ptr<mdbms::ccm::ConcurrencyControlManager> concurrency,
+                               std::shared_ptr<mdbms::fr::FailureRecoveryManager> recovery)
     : current_transaction_id(-1) {
     if (optimizer) {
         qo_engine = std::move(optimizer);
@@ -22,14 +23,18 @@ QueryProcessor::QueryProcessor(std::shared_ptr<mdbms::qo::OptimizationEngine> op
     if (storage) {
         sm_engine = std::move(storage);
     } else {
-        sm_engine = std::make_shared<mdbms::sm::StorageEngine>("data");
+        sm_engine = std::make_shared<mdbms::sm::StorageEngine>();
     }
     if (concurrency) {
         ccm_manager = std::move(concurrency);
     } else {
         ccm_manager = std::make_shared<mdbms::ccm::ConcurrencyControlManager>();
     }
-    frm_manager = std::make_shared<mdbms::fr::FailureRecoveryManager>();
+    if (recovery) {
+        frm_manager = std::move(recovery);
+    } else {
+        frm_manager = std::make_shared<mdbms::fr::FailureRecoveryManager>();
+    }
 
     std::cout << "QP: Query Processor initialized" << std::endl;
 }

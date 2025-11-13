@@ -24,8 +24,4 @@ void ConcurrencyControlManager::end_transaction(int transaction_id) {
     std::cout << "CCM: Mengakhiri transaksi " << transaction_id << " (stub)..." << std::endl;
 }
 
-void ConcurrencyControlManager::set_protocol(const std::string& protocol) {
-    std::cout << "CCM: Mengatur protokol ke " << protocol << " (stub)..." << std::endl;
-}
-
 } // namespace mdbms::ccm

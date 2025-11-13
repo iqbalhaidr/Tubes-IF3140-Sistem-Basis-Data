@@ -11,7 +11,7 @@ void FailureRecoveryManager::save_checkpoint() {
     std::cout << "FRM: Menyimpan checkpoint (stub)..." << std::endl;
 }
 
-void FailureRecoveryManager::recover(/* ... */) {
+void FailureRecoveryManager::recover(const RecoverCriteria&) {
     std::cout << "FRM: Melakukan recovery (stub)..." << std::endl;
 }
 

@@ -7,7 +7,7 @@ namespace mdbms::sm {
 
 class StorageEngine {
 public:
-    // Constructor
+    StorageEngine();
     StorageEngine(const std::string& data_dir);
     Rows<Row> read_block(const DataRetrieval& retrieval);
     int write_block(const DataWrite<Row>& write);

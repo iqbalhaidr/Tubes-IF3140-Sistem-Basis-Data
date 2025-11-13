@@ -7,7 +7,7 @@
 
 int main() {
     auto optimizer = std::make_shared<mdbms::qo::OptimizationEngine>();
-    auto storage = std::make_shared<mdbms::sm::StorageEngine>("data");
+    auto storage = std::make_shared<mdbms::sm::StorageEngine>();
     mdbms::qp::QueryProcessor query_processor(optimizer, storage);
 
     const std::string query = "SELECT * FROM integration_test";

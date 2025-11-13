@@ -7,7 +7,7 @@
 
 int main() {
     auto optimization_engine = std::make_shared<mdbms::qo::OptimizationEngine>();
-    auto storage_engine = std::make_shared<mdbms::sm::StorageEngine>("data");
+    auto storage_engine = std::make_shared<mdbms::sm::StorageEngine>();
     mdbms::qp::QueryProcessor query_processor(optimization_engine, storage_engine);
 
     std::cout << "Main: Query Processor and Optimization Engine initialized." << std::endl;

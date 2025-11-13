@@ -1,6 +1,7 @@
 #include "query_optimizer.h"
 #include "query_processor.h"
 #include "storage_manager.h"
+#include "failure_recovery.h"
 
 #include <iostream>
 #include <memory>
@@ -8,9 +9,10 @@
 
 int main() {
     auto optimizer = std::make_shared<mdbms::qo::OptimizationEngine>();
-    auto storage = std::make_shared<mdbms::sm::StorageEngine>("data");
+    auto storage = std::make_shared<mdbms::sm::StorageEngine>();
+    auto recovery = std::make_shared<mdbms::fr::FailureRecoveryManager>();
 
-    mdbms::qp::QueryProcessor query_processor(optimizer, storage);
+    mdbms::qp::QueryProcessor query_processor(optimizer, storage, nullptr, recovery);
 
     const std::string query = "SELECT name FROM integration_stub";
     std::ostringstream captured_output;
@@ -58,10 +60,15 @@ int main() {
         passed = false;
     }
 
+    if (out.find("FRM: Menulis log") == std::string::npos) {
+        std::cerr << "[FAIL] Failure recovery manager did not log operations\n";
+        passed = false;
+    }
+
     if (!passed) {
         return 1;
     }
 
-    std::cout << "[PASS] QueryProcessor/Optimizer/Storage/CCM stub integration\n";
+    std::cout << "[PASS] QueryProcessor/Optimizer/Storage/CCM/FRM stub integration\n";
     return 0;
 }
