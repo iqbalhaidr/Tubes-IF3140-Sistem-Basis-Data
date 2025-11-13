@@ -4,6 +4,7 @@
 
 #include <iostream>
 #include <memory>
+#include <sstream>
 
 int main() {
     auto optimizer = std::make_shared<mdbms::qo::OptimizationEngine>();
@@ -12,7 +13,10 @@ int main() {
     mdbms::qp::QueryProcessor query_processor(optimizer, storage);
 
     const std::string query = "SELECT name FROM integration_stub";
+    std::ostringstream captured_output;
+    auto* original_buf = std::cout.rdbuf(captured_output.rdbuf());
     const auto result = query_processor.execute_query(query);
+    std::cout.rdbuf(original_buf);
 
     bool passed = true;
 
@@ -36,10 +40,28 @@ int main() {
         passed = false;
     }
 
+    const std::string out = captured_output.str();
+    if (out.find("CCM: Memulai transaksi") == std::string::npos) {
+        std::cerr << "[FAIL] Concurrency manager did not start transaction\n";
+        passed = false;
+    }
+    if (out.find("CCM: Memvalidasi objek") == std::string::npos) {
+        std::cerr << "[FAIL] Concurrency manager did not validate object\n";
+        passed = false;
+    }
+    if (out.find("CCM: Logging objek") == std::string::npos) {
+        std::cerr << "[FAIL] Concurrency manager did not log object\n";
+        passed = false;
+    }
+    if (out.find("CCM: Mengakhiri transaksi") == std::string::npos) {
+        std::cerr << "[FAIL] Concurrency manager did not end transaction\n";
+        passed = false;
+    }
+
     if (!passed) {
         return 1;
     }
 
-    std::cout << "[PASS] QueryProcessor/Optimizer/Storage stub integration\n";
+    std::cout << "[PASS] QueryProcessor/Optimizer/Storage/CCM stub integration\n";
     return 0;
 }

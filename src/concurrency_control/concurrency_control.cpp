@@ -8,17 +8,24 @@ int ConcurrencyControlManager::begin_transaction() {
     return 1;
 }
 
-void ConcurrencyControlManager::log_object(/* ... */) {
-    std::cout << "CCM: Logging objek (stub)..." << std::endl;
+void ConcurrencyControlManager::log_object(const Row& object, int transaction_id) {
+    std::cout << "CCM: Logging objek (stub) untuk transaksi " << transaction_id
+              << " pada tabel " << object.table_name << std::endl;
 }
 
-bool ConcurrencyControlManager::validate_object(/* ... */) {
-    std::cout << "CCM: Memvalidasi objek (stub)..." << std::endl;
-    return true;
+Response ConcurrencyControlManager::validate_object(const Row& object, int transaction_id, Action action) {
+    std::cout << "CCM: Memvalidasi objek (stub) untuk transaksi " << transaction_id
+              << " aksi " << (action == Action::READ ? "READ" : "WRITE")
+              << " pada tabel " << object.table_name << std::endl;
+    return Response(true, transaction_id);
 }
 
 void ConcurrencyControlManager::end_transaction(int transaction_id) {
     std::cout << "CCM: Mengakhiri transaksi " << transaction_id << " (stub)..." << std::endl;
+}
+
+void ConcurrencyControlManager::set_protocol(const std::string& protocol) {
+    std::cout << "CCM: Mengatur protokol ke " << protocol << " (stub)..." << std::endl;
 }
 
 } // namespace mdbms::ccm

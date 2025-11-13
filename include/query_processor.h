@@ -13,7 +13,8 @@ namespace mdbms::qp {
 class QueryProcessor {
 public:
     explicit QueryProcessor(std::shared_ptr<mdbms::qo::OptimizationEngine> optimizer = nullptr,
-                            std::shared_ptr<mdbms::sm::StorageEngine> storage = nullptr);
+                            std::shared_ptr<mdbms::sm::StorageEngine> storage = nullptr,
+                            std::shared_ptr<mdbms::ccm::ConcurrencyControlManager> concurrency = nullptr);
 
     /**
     * Todo:

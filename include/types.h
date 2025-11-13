@@ -2,6 +2,8 @@
 
 #include <any>
 #include <map>
+#include <any>
+#include <map>
 #include <string>
 #include <vector>
 #include <ctime>
@@ -148,34 +150,34 @@ struct TableSchema {
     TableSchema() = default;
 };
 
-// Failure Recovery (masih stub, aktifkan saat dibutuhkan)
-// struct RecoverCriteria {
-//     std::time_t timestamp;      // Recovery hingga timestamp tertentu
-//     int transaction_id;         // Recovery untuk transaction ID tertentu
-//     bool use_timestamp;         // true jika menggunakan timestamp, false jika menggunakan transaction_id
-//
-//     RecoverCriteria() : timestamp(0), transaction_id(-1), use_timestamp(false) {}
-// };
-//
-// struct LogEntry {
-//     int log_id;                 // ID unik log entry
-//     int transaction_id;         // ID transaksi
-//     std::time_t timestamp;      // Waktu log dibuat
-//     std::string operation;      // Jenis operasi: BEGIN, COMMIT, ABORT, UPDATE, INSERT, DELETE
-//     std::string table_name;     // Nama tabel yang terpengaruh
-//     Row old_value;              // Nilai lama (untuk UNDO)
-//     Row new_value;              // Nilai baru (untuk REDO)
-//     std::string query;          // Query yang dieksekusi
-//
-//     LogEntry() : log_id(-1), transaction_id(-1), timestamp(std::time(nullptr)) {}
-// };
-//
-// struct CheckpointInfo {
-//     int checkpoint_id;
-//     std::time_t timestamp;
-//     std::vector<int> active_transactions;  // Daftar transaksi yang aktif saat checkpoint
-//
-//     CheckpointInfo() : checkpoint_id(-1), timestamp(std::time(nullptr)) {}
-// };
+// Failure Recovery
+struct RecoverCriteria {
+    std::time_t timestamp;
+    int transaction_id;
+    bool use_timestamp;
+
+    RecoverCriteria() : timestamp(0), transaction_id(-1), use_timestamp(false) {}
+};
+
+struct LogEntry {
+    int log_id;
+    int transaction_id;
+    std::time_t timestamp;
+    std::string operation;
+    std::string table_name;
+    Row old_value;
+    Row new_value;
+    std::string query;
+
+    LogEntry() : log_id(-1), transaction_id(-1), timestamp(std::time(nullptr)) {}
+};
+
+struct CheckpointInfo {
+    int checkpoint_id;
+    std::time_t timestamp;     
+    std::vector<int> active_transactions;
+
+    CheckpointInfo() : checkpoint_id(-1), timestamp(std::time(nullptr)) {}
+};
 
 }  // namespace mdbms

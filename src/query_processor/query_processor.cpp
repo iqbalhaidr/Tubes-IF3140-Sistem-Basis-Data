@@ -11,7 +11,8 @@
 namespace mdbms::qp {
 
 QueryProcessor::QueryProcessor(std::shared_ptr<mdbms::qo::OptimizationEngine> optimizer,
-                               std::shared_ptr<mdbms::sm::StorageEngine> storage)
+                               std::shared_ptr<mdbms::sm::StorageEngine> storage,
+                               std::shared_ptr<mdbms::ccm::ConcurrencyControlManager> concurrency)
     : current_transaction_id(-1) {
     if (optimizer) {
         qo_engine = std::move(optimizer);
@@ -23,7 +24,11 @@ QueryProcessor::QueryProcessor(std::shared_ptr<mdbms::qo::OptimizationEngine> op
     } else {
         sm_engine = std::make_shared<mdbms::sm::StorageEngine>("data");
     }
-    ccm_manager = std::make_shared<mdbms::ccm::ConcurrencyControlManager>();
+    if (concurrency) {
+        ccm_manager = std::move(concurrency);
+    } else {
+        ccm_manager = std::make_shared<mdbms::ccm::ConcurrencyControlManager>();
+    }
     frm_manager = std::make_shared<mdbms::fr::FailureRecoveryManager>();
 
     std::cout << "QP: Query Processor initialized" << std::endl;
@@ -111,6 +116,11 @@ ExecutionResult QueryProcessor::execute_query(const std::string& query) {
             frm_manager->write_log(result);
         }
 
+        if (result.success && ccm_manager && query_type == "SELECT") {
+            ccm_manager->end_transaction(result.transaction_id);
+            current_transaction_id = -1;
+        }
+
     } catch (const std::exception& e) {
         result.success = false;
         result.message = "Error: " + std::string(e.what());
@@ -137,6 +147,17 @@ Rows<Row> QueryProcessor::execute_select(const mdbms::qo::ParsedQuery& parsed_qu
             retrieval.table = table_name;
             retrieval.columns = parsed_query.select_columns;
             retrieval.search_type = SearchType::LINEAR;
+
+            if (ccm_manager) {
+                Row request;
+                request.table_name = table_name;
+                request.row_id = -1;
+                Response access = ccm_manager->validate_object(request, transaction_id, Action::READ);
+                if (!access.allowed) {
+                    throw std::runtime_error("Concurrency control denied READ access for table " + table_name);
+                }
+                ccm_manager->log_object(request, transaction_id);
+            }
 
             // Check if table has index
             // if (!parsed_query.where_conditions.empty()) {
