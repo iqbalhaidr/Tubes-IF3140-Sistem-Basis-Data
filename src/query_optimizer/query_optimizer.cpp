@@ -3,6 +3,7 @@
 namespace mdbms::qo {
 
 ParsedQuery sql_parser(const std::string& query); // yang punya internal
+QueryTree* plan_tree(const ParsedQuery& parsed);  // builder QueryTree
 
 OptimizationEngine::OptimizationEngine() = default;
 OptimizationEngine::~OptimizationEngine() = default;
@@ -10,7 +11,9 @@ OptimizationEngine::~OptimizationEngine() = default;
 ParsedQuery OptimizationEngine::parse_query(const std::string& query) { // ini buat public
     ParsedQuery parsed = ::mdbms::qo::sql_parser(query);
 
-    // TODO(#plan_tree): hubungkan builder QueryTree ke parsed.query_tree ketika sudah tersedia.
+    // Build QueryTree from parsed query
+    parsed.query_tree = plan_tree(parsed);
+    
     return parsed;
 }
 
