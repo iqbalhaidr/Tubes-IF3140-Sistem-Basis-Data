@@ -1,4 +1,6 @@
 #pragma once
+
+#include <memory>
 #include <map>
 #include <string>
 #include <vector>
@@ -76,10 +78,13 @@ namespace mdbms::qo {
         }
     };
 
-    class OptimizationEngine {
-       public:
-        ParsedQuery parse_query(const std::string& query);
-        ParsedQuery optimize_query(const ParsedQuery& query);
-    };
+class OptimizationEngine {
+   public:
+    OptimizationEngine();
+    ~OptimizationEngine();
+
+    ParsedQuery parse_query(const std::string& query);
+    ParsedQuery optimize_query(const ParsedQuery& query);
+};
 
 }  // namespace mdbms::qo

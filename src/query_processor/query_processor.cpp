@@ -1,6 +1,8 @@
 #include "query_processor.h"
+#include <algorithm>
 #include <iostream>
 #include <sstream>
+#include <utility>
 #include "concurrency_control.h"
 #include "failure_recovery.h"
 #include "query_optimizer.h"
@@ -8,8 +10,13 @@
 
 namespace mdbms::qp {
 
-QueryProcessor::QueryProcessor() : current_transaction_id(-1) {
-    qo_engine = std::make_shared<mdbms::qo::OptimizationEngine>();
+QueryProcessor::QueryProcessor(std::shared_ptr<mdbms::qo::OptimizationEngine> optimizer)
+    : current_transaction_id(-1) {
+    if (optimizer) {
+        qo_engine = std::move(optimizer);
+    } else {
+        qo_engine = std::make_shared<mdbms::qo::OptimizationEngine>();
+    }
     sm_engine = std::make_shared<mdbms::sm::StorageEngine>();
     ccm_manager = std::make_shared<mdbms::ccm::ConcurrencyControlManager>();
     frm_manager = std::make_shared<mdbms::fr::FailureRecoveryManager>();

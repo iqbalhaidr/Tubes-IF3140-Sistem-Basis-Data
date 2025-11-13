@@ -1,4 +1,6 @@
 #pragma once
+#include <memory>
+
 #include "types.h"
 
 namespace mdbms::qo { class OptimizationEngine; struct ParsedQuery; struct QueryTree; }
@@ -10,7 +12,7 @@ namespace mdbms::qp {
 
 class QueryProcessor {
 public:
-    QueryProcessor();
+    explicit QueryProcessor(std::shared_ptr<mdbms::qo::OptimizationEngine> optimizer = nullptr);
 
     /**
     * Todo:
