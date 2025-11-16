@@ -3,6 +3,7 @@
 #include <cassert>
 #include <filesystem>
 #include <any>
+#include <set>
 
 void print_rows(const mdbms::Rows<mdbms::Row>& rows) {
     std::cout << "--- Hasil Query (Total: " << rows.rows_count << ") ---" << std::endl;
@@ -141,11 +142,144 @@ int main() {
     assert(rows_all.rows_count == 1);
     std::cout << "Test 7 Lolos." << std::endl;
 
-    std::cout << "\n*** SEMUA TES SM LOLOS! ***" << std::endl;
+    // Tambah beberapa data tambahan termasuk multiple value dalam satu key hash
+    mdbms::DataWrite<mdbms::Row> insert_cat1;
+    insert_cat1.table = "Student";
+    insert_cat1.new_value.table_name = "Student";
+    insert_cat1.new_value.columns = {
+        {"StudentID", 103},
+        {"FullName", std::string("Catherine Johnson-Delacroix")},
+        {"GPA", 3.95f}
+    };
+    assert(sm.write_block(insert_cat1) == 1);
 
+    mdbms::DataWrite<mdbms::Row> insert_dan;
+    insert_dan.table = "Student";
+    insert_dan.new_value.table_name = "Student";
+    insert_dan.new_value.columns = {
+        {"StudentID", 104},
+        {"FullName", std::string("Daniel \"Dan\" Robertson the Third")},
+        {"GPA", 2.75f}
+    };
+    assert(sm.write_block(insert_dan) == 1);
+
+    mdbms::DataWrite<mdbms::Row> insert_el;
+    insert_el.table = "Student";
+    insert_el.new_value.table_name = "Student";
+    insert_el.new_value.columns = {
+        {"StudentID", 105},
+        {"FullName", std::string("Eleanora Maximillian Vanderfeldt")},
+        {"GPA", 3.60f}
+    };
+    assert(sm.write_block(insert_el) == 1);
+
+    // Multiple entries with SAME KEY (StudentID = 103)
+    mdbms::DataWrite<mdbms::Row> insert_cat2;
+    insert_cat2.table = "Student";
+    insert_cat2.new_value.table_name = "Student";
+    insert_cat2.new_value.columns = {
+        {"StudentID", 103},
+        {"FullName", std::string("Cat Johnson Clone A")},
+        {"GPA", 3.10f}
+    };
+    assert(sm.write_block(insert_cat2) == 1);
+
+    mdbms::DataWrite<mdbms::Row> insert_cat3;
+    insert_cat3.table = "Student";
+    insert_cat3.new_value.table_name = "Student";
+    insert_cat3.new_value.columns = {
+        {"StudentID", 103},
+        {"FullName", std::string("Cat Johnson Clone B - With Very Long Name 1234567890")},
+        {"GPA", 3.20f}
+    };
+    assert(sm.write_block(insert_cat3) == 1);
+
+    std::cout << "Berhasil menambah data tambahan (termasuk multiple StudentID=103).\n" << std::endl;
+
+    // Baca lagi
+    rows_all = sm.read_block(read_all);
+    print_rows(rows_all);
+
+    // total data: sebelumnya 1 data (Alice), ditambah 5 = total 6
+    assert(rows_all.rows_count == 6);
+    std::cout << "Berhasil baca semua data." << std::endl;
+
+    // --- TEST 8: SET INDEX (HASH) ---
+    std::cout << "\n--- TEST 8: SET INDEX (HASH) ---" << std::endl;
+    sm.set_index("Student", "StudentID", mdbms::IndexType::HASH);
+
+    std::string idx_file = test_dir + "/Student.StudentID.hashidx";
+    assert(std::filesystem::exists(idx_file));
+    std::cout << "Index file ditemukan: " << idx_file << std::endl;
+
+    std::cout << "Test 8 Lolos." << std::endl;
+
+    std::cout << "\n--- TEST 9: VERIFY HASH INDEX CONTENT ---" << std::endl;
+
+    std::ifstream idx(idx_file, std::ios::binary);
+    assert(idx.is_open());
+
+    // Magic header
+    char magic[4];
+    idx.read(magic, 4);
+    assert(std::string(magic, 4) == "HIDX");
+
+    // Index type
+    uint8_t idx_type = 255;
+    idx.read(reinterpret_cast<char*>(&idx_type), 1);
+    assert(idx_type == 0);
+
+    // dtype
+    uint8_t dtype = 255;
+    idx.read(reinterpret_cast<char*>(&dtype), 1);
+    assert(dtype == 0);
+
+    // number of unique keys
+    uint32_t nkeys = 0;
+    idx.read(reinterpret_cast<char*>(&nkeys), sizeof(nkeys));
+    assert(nkeys == 4);
+
+    // To store key -> count
+    std::map<int32_t, uint32_t> key_counts;
+    std::set<int32_t> keys;
+
+    for (uint32_t i = 0; i < nkeys; i++) {
+        int32_t key;
+        idx.read(reinterpret_cast<char*>(&key), sizeof(key));
+
+        uint32_t cnt;
+        idx.read(reinterpret_cast<char*>(&cnt), sizeof(cnt));
+
+        // store count
+        key_counts[key] = cnt;
+
+        // skip offsets
+        for (uint32_t j = 0; j < cnt; j++) {
+            int64_t offset;
+            idx.read(reinterpret_cast<char*>(&offset), sizeof(offset));
+        }
+
+        keys.insert(key);
+    }
+
+    // verify keys exist
+    assert(keys.count(101) == 1);
+    assert(keys.count(103) == 1);
+    assert(keys.count(104) == 1);
+    assert(keys.count(105) == 1);
+
+    // verify counts per key
+    assert(key_counts[101] == 1);
+    assert(key_counts[103] == 3);   // MULTIPLE VALUES!
+    assert(key_counts[104] == 1);
+    assert(key_counts[105] == 1);
+    std::cout << "Test 9 Lolos (including value-count verification)." << std::endl;
+
+    std::cout << "\n*** SEMUA TES SM LOLOS! ***" << std::endl;
+    
     // Cleanup
-    std::remove(student_file.c_str());
-    std::remove(course_file.c_str());
-    std::filesystem::remove_all(test_dir);
+    // std::remove(student_file.c_str());
+    // std::remove(course_file.c_str());
+    // std::filesystem::remove_all(test_dir);
     return 0;
 }
