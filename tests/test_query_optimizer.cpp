@@ -3,6 +3,11 @@
 #include <iostream>
 #include <iomanip>
 
+// Cara test:
+//   cmake -S . -B build
+//   cmake --build build --target test_query_optimizer
+//   ./build/src/test_query_optimizer
+
 void print_tree(const mdbms::qo::QueryTree* node, const std::string& prefix = "", bool is_last = true, int level = 0) {
     if (!node) return;
     

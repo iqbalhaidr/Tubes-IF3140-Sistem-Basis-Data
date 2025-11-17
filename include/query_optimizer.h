@@ -87,4 +87,8 @@ class OptimizationEngine {
     ParsedQuery optimize_query(const ParsedQuery& query);
 };
 
+// Parser and logical plan builder helpers
+ParsedQuery sql_parser(const std::string& query);
+QueryTree* plan_tree(const ParsedQuery& parsed);
+
 }  // namespace mdbms::qo

@@ -2,48 +2,17 @@
 
 namespace mdbms::qo {
 
-namespace {
-
-ParsedQuery build_dummy_parsed_query(const std::string& query) {
-    ParsedQuery parsed;
-    parsed.original_query = query;
-    parsed.query_type = "SELECT";
-    parsed.select_columns = {"*"};
-    parsed.from_tables = {"dummy_table"};
-    parsed.order_by_column = "";
-    parsed.order_ascending = true;
-    parsed.limit_value = -1;
-    parsed.estimated_cost = 0;
-
-    auto* root = new QueryTree();
-    root->type = "SELECT";
-    root->value = "dummy_table";
-    root->estimated_rows = 1;
-    root->estimated_cost = 0;
-
-    parsed.query_tree = root;
-    return parsed;
-}
-
-}  // namespace
-
 OptimizationEngine::OptimizationEngine() = default;
 OptimizationEngine::~OptimizationEngine() = default;
 
-// ParsedQuery OptimizationEngine::parse_query(const std::string& query) { // ini buat public
-//     ParsedQuery parsed = ::mdbms::qo::sql_parser(query);
-
-//     Build QueryTree from parsed query
-//     parsed.query_tree = plan_tree(parsed);
-    
-//     return parsed;
-// }
-
 ParsedQuery OptimizationEngine::parse_query(const std::string& query) {
-    return build_dummy_parsed_query(query);
+    ParsedQuery parsed = sql_parser(query);
+    parsed.query_tree = plan_tree(parsed);
+    return parsed;
 }
 
 ParsedQuery OptimizationEngine::optimize_query(const ParsedQuery& query) {
+    // DUMMY 
     ParsedQuery optimized = query;
     if (!optimized.query_tree) {
         return optimized;
