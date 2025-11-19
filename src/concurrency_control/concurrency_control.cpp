@@ -72,17 +72,19 @@ void ConcurrencyControlManager::switch_algorithm(const std::string& algorithm) {
     std::string algo_lower = algorithm;
     std::transform(algo_lower.begin(), algo_lower.end(), algo_lower.begin(), ::tolower);
 
+    cc_manager_.reset();
+
     if (algo_lower == "timestamp") {
         // TODO: Implementasi Timestamp
         // cc_manager_ = std::make_unique<TimestampCCManager>();
         // current_algorithm_ = "timestamp";
     }
-    // TODO: Implementasi 2PL dan MVCC
-    // else if (algo_lower == "twophaselocking" || algo_lower == "2pl") {
-    //     cc_manager_ = std::make_unique<TwoPhaseLockingCCManager>();
-    //     current_algorithm_ = "twophaselocking";
-    // }
+    else if (algo_lower == "twophaselocking" || algo_lower == "2pl") {
+        cc_manager_ = std::make_unique<TwoPhaseLockingCCManager>();
+        current_algorithm_ = "twophaselocking";
+    }
     // else if (algo_lower == "mvcc") {
+    //     TODO: Implementasi MVCC
     //     cc_manager_ = std::make_unique<MVCCManager>();
     //     current_algorithm_ = "mvcc";
     // }

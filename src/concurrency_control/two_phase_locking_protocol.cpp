@@ -45,6 +45,19 @@ Response TwoPhaseLockingCCManager::validate_object(const Row& object, int transa
         return Response(false, transaction_id);
     }
 
+    // cek bahwa transaksi masih aktif
+    if (transaction_info->status == TransactionStatus::COMMITTED) {
+        std::cout << "2PL: Transaksi " << transaction_id
+                  << " sudah selesai (COMMITTED), tidak dapat mengakses lebih lanjut" << std::endl;
+        return Response(false, transaction_id);
+    }
+
+    if (transaction_info->status == TransactionStatus::ABORTED) {
+        std::cout << "2PL: Transaksi " << transaction_id
+                  << " sudah selesai (ABORTED), tidak dapat mengakses lebih lanjut" << std::endl;
+        return Response(false, transaction_id);
+    }
+
     // cek bahwa transaksi tidak sedang berada di fase SHRINKING
     if (transaction_info->phase == TransactionPhase::SHRINKING) {
         std::cout << "2PL: Transaksi " << transaction_id
@@ -75,6 +88,8 @@ Response TwoPhaseLockingCCManager::validate_object(const Row& object, int transa
 }
 
 bool TwoPhaseLockingCCManager::acquire_s_lock(int transaction_id, size_t record_hash) {
+    std::cout << "2PL: Transaksi " << transaction_id << " mencoba memperoleh S lock pada record "
+              << record_hash << std::endl;
     auto transaction_info = transactions[transaction_id];
 
     // sudah memiliki slock
@@ -114,6 +129,8 @@ bool TwoPhaseLockingCCManager::acquire_s_lock(int transaction_id, size_t record_
 }
 
 bool TwoPhaseLockingCCManager::acquire_x_lock(int transaction_id, size_t record_hash) {
+    std::cout << "2PL: Transaksi " << transaction_id << " mencoba memperoleh X lock pada record "
+              << record_hash << std::endl;
     auto transaction_info = transactions[transaction_id];
 
     // sudah memiliki xlock
@@ -232,7 +249,7 @@ void TwoPhaseLockingCCManager::abort_transaction(int transaction_id) {
     auto transaction_info = transactions[transaction_id];
     transaction_info->status = TransactionStatus::ABORTED;
 
-    std::cout << "2PL: Transaksi " << transaction_id << " diabort." << std::endl;
+    std::cout << "2PL: Transaksi " << transaction_id << " diabort (fase SHRINKING)." << std::endl;
     release_all_locks(transaction_id);
 }
 
@@ -247,13 +264,12 @@ void TwoPhaseLockingCCManager::end_transaction(int transaction_id) {
     transaction_info->phase = TransactionPhase::SHRINKING;
 
     if (transaction_info->status == TransactionStatus::ABORTED) {
-        std::cout << "2PL: Transaksi " << transaction_id
-                  << " sudah diabort, tidak dapat diakhiri secara normal." << std::endl;
+        std::cout << "2PL: Transaksi " << transaction_id << " sudah diabort." << std::endl;
         return;
     } else {
         transaction_info->status = TransactionStatus::COMMITTED;
-        std::cout << "2PL: Transaksi " << transaction_id << " berhasil commit ahayyy." << std::endl;
-        return;
+        std::cout << "2PL: Transaksi " << transaction_id << " berhasil commit (fase SHRINKING)."
+                  << std::endl;
     }
 
     release_all_locks(transaction_id);
