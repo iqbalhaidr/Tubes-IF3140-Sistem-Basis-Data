@@ -1,5 +1,6 @@
 #pragma once
 #include <map>
+#include <set>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -54,6 +55,58 @@ private:
     std::map<size_t, ObjectTimestamp> object_timestamps_;
     int current_timestamp_;
     std::mutex mutex_;
+};
+
+// ini kayanya bakal dipindah ke types.h (tapi yah sama aja)
+enum class TransactionPhase {
+    GROWING,
+    SHRINKING
+};
+
+struct TransactionInfo2PL {
+    int id;
+    TransactionStatus status;
+    TransactionPhase phase;
+    std::set<size_t> locked_records;  // Hash dari record yang dikunci
+
+    TransactionInfo2PL(int tid)
+        : id(tid), status(TransactionStatus::ACTIVE), phase(TransactionPhase::GROWING) {}
+};
+
+class TwoPhaseLockingCCManager : public CCManager {
+public:
+    TwoPhaseLockingCCManager();
+    ~TwoPhaseLockingCCManager() override;
+
+    int begin_transaction() override;
+    void log_object(const Row& object, int transaction_id) override;
+    Response validate_object(const Row& object, int transaction_id, Action action) override;
+    void end_transaction(int transaction_id) override;
+
+private:
+    bool acquire_s_lock(int transaction_id, size_t record_hash);
+    bool acquire_x_lock(int transaction_id, size_t record_hash);
+    bool check_cycle(int current_id, std::set<int>& visited, std::set<int>& rec_stack);
+    bool detect_deadlock(int waiting_trx_id, int holding_trx_id);
+    void abort_transaction(int transaction_id);
+    void release_s_lock(int transaction_id, size_t record_hash);
+    void release_x_lock(int transaction_id, size_t record_hash);
+    void release_all_locks(int transaction_id);
+
+    // map <record_hash -> transaction ID> untuk xlock
+    std::map<size_t, int> x_lock_table;
+
+    // map <record_hash -> set of transaction ID> untuk slock
+    std::map<size_t, std::set<int>> s_lock_table;
+
+    // map <transaction ID -> info transaksi dalam protokol 2PL>
+    std::map<int, std::shared_ptr<TransactionInfo2PL>> transactions;
+
+    // map <transaction ID -> set of transaction ID> untuk wait-for graph (deteksi deadlock)
+    std::map<int, std::set<int>> wait_for_graph;
+
+    int current_transaction_id;
+    std::recursive_mutex mutex_;
 };
 
 // Kelas wrapper yang mengelola protokol concurrency control aktif (Singleton)
