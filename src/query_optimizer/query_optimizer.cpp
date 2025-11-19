@@ -19,7 +19,12 @@ ParsedQuery OptimizationEngine::optimize_query(const ParsedQuery& query) {
     }
 
     if (query.query_tree) {
-        optimized.query_tree = query.query_tree->clone();
+        optimized.query_tree = optimize_tree(
+            query.query_tree->clone(),
+            query.where_conditions,
+            query.from_tables,
+            query.select_columns
+        );
         optimized.query_tree->estimated_cost = optimized.estimated_cost;
     } else {
         optimized.query_tree = new QueryTree();
