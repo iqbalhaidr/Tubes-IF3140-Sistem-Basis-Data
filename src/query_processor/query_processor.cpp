@@ -561,9 +561,79 @@ Rows<Row> QueryProcessor::execute_join(const Rows<Row>& left_table, const Rows<R
     return result;
 }
 
-// TODO
-int QueryProcessor::execute_update(const mdbms::qo::ParsedQuery& parsed_query, int transaction_id){
-    return 0;
+int QueryProcessor::execute_update(const mdbms::qo::ParsedQuery& parsed_query, int transaction_id) {
+    int affected_rows = 0;
+
+    try {
+        if (parsed_query.from_tables.empty()) {
+            throw std::runtime_error("UPDATE requires a table name");
+        }
+
+        std::string table_name = parsed_query.from_tables[0];
+
+        // Request WRITE access ke CCM (nunggu integrasi ccm)
+        if (ccm_manager) {
+            Row request;
+            request.table_name = table_name;
+            request.row_id = -1;
+            Response access = ccm_manager->validate_object(request, transaction_id, Action::WRITE);
+            if (!access.allowed) {
+                throw std::runtime_error("Concurrency control denied WRITE access for table " + table_name);
+            }
+            ccm_manager->log_object(request, transaction_id);
+        }
+
+        DataRetrieval retrieval;
+        retrieval.table = table_name;
+        retrieval.columns = {"*"};
+        retrieval.search_type = SearchType::LINEAR;
+        Rows<Row> all_rows = sm_engine->read_block(retrieval);
+
+        Rows<Row> rows_to_update;
+        if (!parsed_query.where_conditions.empty()) {
+            rows_to_update = apply_where_clause(all_rows, parsed_query.where_conditions);
+        } else {
+            rows_to_update = all_rows;
+        }
+
+        std::cout << "QP: Found " << rows_to_update.rows_count << " rows to update in " << table_name << std::endl;
+
+        DataWrite<Row> update_data;
+        update_data.table = table_name;
+        update_data.conditions = parsed_query.where_conditions;
+        update_data.is_insert = false;
+
+        for (const auto& [col_name, new_value] : parsed_query.set_values) {
+            update_data.columns.push_back(col_name);
+            update_data.new_value.columns[col_name] = new_value;
+        }
+
+        affected_rows = sm_engine->write_block(update_data);
+
+        std::cout << "QP: Updated " << affected_rows << " rows in " << table_name << std::endl;
+
+        // Log to Failure Recovery Manager (nunggu integrasi FRM)
+        if (frm_manager && affected_rows > 0) {
+            LogEntry log_entry;
+            log_entry.transaction_id = transaction_id;
+            log_entry.timestamp = std::time(nullptr);
+            log_entry.operation = Operation::UPDATE;
+            log_entry.table_name = table_name;
+            log_entry.query = parsed_query.original_query;
+
+            // Store old and new values untuk rollback
+            if (!rows_to_update.data.empty()) {
+                log_entry.old_value = rows_to_update.data[0];
+            }
+            log_entry.new_value = update_data.new_value;
+        }
+
+    } catch (const std::exception& e) {
+        std::cerr << "QP UPDATE error: " << e.what() << std::endl;
+        throw;
+    }
+
+    return affected_rows;
 }
 
 // TODO

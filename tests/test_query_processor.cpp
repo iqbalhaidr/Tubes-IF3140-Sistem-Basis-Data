@@ -927,8 +927,185 @@ bool test_join_on() {
     return true;
 }
 
+bool test_update_single_column() {
+    std::cout << "\n=== TEST 17: UPDATE Single Column ===" << std::endl;
+
+    TestSetup setup("qp_test_update_single");
+    setup.insert_student(1, "Alice", 3.8f);
+    setup.insert_student(2, "Bob", 3.0f);
+    setup.insert_student(3, "Charlie", 3.5f);
+    setup.insert_student(4, "Diana", 3.5f);
+    setup.insert_student(5, "Alice", 2.5f);
+    setup.insert_student(6, "Frank", 3.7f);
+    setup.insert_student(7, "Grace", 3.4f);
+    setup.insert_student(8, "Henry", 2.8f);
+    setup.insert_student(9, "Ivy", 3.6f);
+    setup.insert_student(10, "Alice", 3.1f);
+
+    std::cout << "Before UPDATE:" << std::endl;
+    auto before = setup.read_all_students();
+    print_rows(before);
+
+    mdbms::qo::ParsedQuery update_query;
+    update_query.query_type = "UPDATE";
+    update_query.from_tables.push_back("Student");
+    update_query.set_values["GPA"] = 4.0f;
+    update_query.where_conditions.push_back(mdbms::Condition("StudentID", "=", 1));
+
+    int txn_id = setup.qp->begin_transaction();
+    int affected = setup.qp->execute_update(update_query, txn_id);
+
+    std::cout << "UPDATE Student SET GPA = 4.0 WHERE StudentID = 1" << std::endl;
+    std::cout << "Affected rows: " << affected << std::endl;
+
+    if (affected != 1) {
+        std::cerr << "[FAIL] Expected 1 affected row, got " << affected << "\n";
+        return false;
+    }
+
+    std::cout << "After UPDATE:" << std::endl;
+    auto after = setup.read_all_students();
+    print_rows(after);
+
+    bool found_updated = false;
+    for (const auto& row : after.data) {
+        int id = std::any_cast<int>(row.columns.at("StudentID"));
+        if (id == 1) {
+            float gpa = std::any_cast<float>(row.columns.at("GPA"));
+            if (gpa == 4.0f) {
+                found_updated = true;
+            } else {
+                std::cerr << "[FAIL] GPA should be 4.0, got " << gpa << "\n";
+                return false;
+            }
+        }
+    }
+
+    if (!found_updated) {
+        std::cerr << "[FAIL] Could not find updated row\n";
+        return false;
+    }
+
+    std::cout << "[PASS] UPDATE Single Column test\n";
+    return true;
+}
+
+bool test_update_multiple_rows() {
+    std::cout << "\n=== TEST 18: UPDATE Multiple Rows ===" << std::endl;
+
+    TestSetup setup("qp_test_update_multi");
+    setup.insert_student(1, "Alice", 3.8f);
+    setup.insert_student(2, "Bob", 3.0f);
+    setup.insert_student(3, "Charlie", 3.5f);
+    setup.insert_student(4, "Diana", 3.5f);
+    setup.insert_student(5, "Alice", 2.5f);
+    setup.insert_student(6, "Frank", 3.7f);
+    setup.insert_student(7, "Grace", 3.4f);
+    setup.insert_student(8, "Henry", 2.8f);
+    setup.insert_student(9, "Ivy", 3.6f);
+    setup.insert_student(10, "Alice", 3.1f);
+
+    std::cout << "Before UPDATE:" << std::endl;
+    auto before = setup.read_all_students();
+    print_rows(before);
+
+    // Should update: Alice (3.8), Frank (3.7), Ivy (3.6) = 3 rows
+    mdbms::qo::ParsedQuery update_query;
+    update_query.query_type = "UPDATE";
+    update_query.from_tables.push_back("Student");
+    update_query.set_values["GPA"] = 3.9f;
+    update_query.where_conditions.push_back(mdbms::Condition("GPA", ">", 3.5f));
+
+    int txn_id = setup.qp->begin_transaction();
+    int affected = setup.qp->execute_update(update_query, txn_id);
+
+    std::cout << "UPDATE Student SET GPA = 3.9 WHERE GPA > 3.5" << std::endl;
+    std::cout << "Affected rows: " << affected << std::endl;
+
+    if (affected != 3) {
+        std::cerr << "[FAIL] Expected 3 affected rows, got " << affected << "\n";
+        return false;
+    }
+
+    std::cout << "After UPDATE:" << std::endl;
+    auto after = setup.read_all_students();
+    print_rows(after);
+
+    int count_39 = 0;
+    for (const auto& row : after.data) {
+        float gpa = std::any_cast<float>(row.columns.at("GPA"));
+        if (gpa == 3.9f) {
+            count_39++;
+        }
+    }
+
+    if (count_39 != 3) {
+        std::cerr << "[FAIL] Expected 3 rows with GPA=3.9, got " << count_39 << "\n";
+        return false;
+    }
+
+    std::cout << "[PASS] UPDATE Multiple Rows test\n";
+    return true;
+}
+
+bool test_update_with_string_condition() {
+    std::cout << "\n=== TEST 19: UPDATE with String Condition ===" << std::endl;
+
+    TestSetup setup("qp_test_update_str");
+    setup.insert_student(1, "Alice", 3.8f);
+    setup.insert_student(2, "Bob", 3.0f);
+    setup.insert_student(3, "Charlie", 3.5f);
+    setup.insert_student(4, "Diana", 3.5f);
+    setup.insert_student(5, "Alice", 2.5f);
+    setup.insert_student(6, "Frank", 3.7f);
+    setup.insert_student(7, "Grace", 3.4f);
+    setup.insert_student(8, "Henry", 2.8f);
+    setup.insert_student(9, "Ivy", 3.6f);
+    setup.insert_student(10, "Alice", 3.1f);
+
+    std::cout << "Before UPDATE:" << std::endl;
+    auto before = setup.read_all_students();
+    print_rows(before);
+
+    // Should update 3 rows (ID 1, 5, 10)
+    mdbms::qo::ParsedQuery update_query;
+    update_query.query_type = "UPDATE";
+    update_query.from_tables.push_back("Student");
+    update_query.set_values["GPA"] = 4.0f;
+    update_query.where_conditions.push_back(mdbms::Condition("FullName", "=", std::string("Alice")));
+
+    int txn_id = setup.qp->begin_transaction();
+    int affected = setup.qp->execute_update(update_query, txn_id);
+
+    std::cout << "UPDATE Student SET GPA = 4.0 WHERE FullName = 'Alice'" << std::endl;
+    std::cout << "Affected rows: " << affected << std::endl;
+
+    if (affected != 3) {
+        std::cerr << "[FAIL] Expected 3 affected rows, got " << affected << "\n";
+        return false;
+    }
+
+    std::cout << "After UPDATE:" << std::endl;
+    auto after = setup.read_all_students();
+    print_rows(after);
+
+    for (const auto& row : after.data) {
+        std::string name = std::any_cast<std::string>(row.columns.at("FullName"));
+        if (name == "Alice") {
+            float gpa = std::any_cast<float>(row.columns.at("GPA"));
+            if (gpa != 4.0f) {
+                std::cerr << "[FAIL] Alice's GPA should be 4.0, got " << gpa << "\n";
+                return false;
+            }
+        }
+    }
+
+    std::cout << "[PASS] UPDATE with String Condition test\n";
+    return true;
+}
+
 bool test_natural_join() {
-    std::cout << "\n=== TEST 17: NATURAL JOIN ===" << std::endl;
+    std::cout << "\n=== TEST 20: NATURAL JOIN ===" << std::endl;
 
     TestSetup setup("qp_test_natural_join");
 
@@ -1066,7 +1243,7 @@ int main() {
     std::cout << "===================================" << std::endl;
 
     int passed = 0;
-    int total = 17;
+    int total = 20;
 
     if (test_basic_integration()) passed++;
     if (test_begin_transaction()) passed++;
@@ -1084,6 +1261,9 @@ int main() {
     if (test_combined_where_orderby_limit()) passed++;
     if (test_cartesian_product()) passed++;
     if (test_join_on()) passed++;
+    if (test_update_single_column()) passed++;
+    if (test_update_multiple_rows()) passed++;
+    if (test_update_with_string_condition()) passed++;
     if (test_natural_join()) passed++;
 
     std::cout << "\n========================================" << std::endl;
