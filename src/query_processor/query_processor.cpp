@@ -212,9 +212,8 @@ Rows<Row> QueryProcessor::execute_select(const mdbms::qo::ParsedQuery& parsed_qu
         }
 
         // Apply LIMIT
-        if (parsed_query.limit_value > 0 && parsed_query.limit_value < joined_data.rows_count) {
-            joined_data.data.resize(parsed_query.limit_value);
-            joined_data.rows_count = parsed_query.limit_value;
+        if (parsed_query.limit_value > 0) {
+            joined_data = apply_limit(joined_data, parsed_query.limit_value);
         }
 
         result = joined_data;
@@ -367,6 +366,27 @@ Rows<Row> QueryProcessor::apply_order_by(const Rows<Row>& rows, const std::strin
             return false;
         });
 
+    return result;
+}
+
+Rows<Row> QueryProcessor::apply_limit(const Rows<Row>& rows, int limit) {
+    Rows<Row> result;
+    result.column_names = rows.column_names;
+
+    if (limit <= 0) {
+        return rows;
+    }
+
+    int count = 0;
+    for (const auto& row : rows.data) {
+        if (count >= limit) {
+            break;
+        }
+        result.data.push_back(row);
+        count++;
+    }
+
+    result.rows_count = static_cast<int>(result.data.size());
     return result;
 }
 

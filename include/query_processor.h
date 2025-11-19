@@ -51,6 +51,7 @@ public:
     Rows<Row> execute_join(const Rows<Row>& left_table, const Rows<Row>& right_table, const Condition& join_condition, const std::string& join_type);
     Rows<Row> apply_where_clause(const Rows<Row>& rows,const std::vector<Condition>& conditions);
     Rows<Row> apply_order_by(const Rows<Row>& rows, const std::string& column, bool ascending);
+    Rows<Row> apply_limit(const Rows<Row>& rows, int limit);
 private:
     std::shared_ptr<mdbms::qo::OptimizationEngine> qo_engine;
     std::shared_ptr<mdbms::sm::StorageEngine> sm_engine;
