@@ -26,9 +26,9 @@ QueryProcessor::QueryProcessor(std::shared_ptr<mdbms::qo::OptimizationEngine> op
         sm_engine = std::make_shared<mdbms::sm::StorageEngine>();
     }
     if (concurrency) {
-        ccm_manager = std::move(concurrency);
+        ccm_manager = concurrency.get();
     } else {
-        ccm_manager = std::make_shared<mdbms::ccm::ConcurrencyControlManager>();
+        ccm_manager = &mdbms::ccm::ConcurrencyControlManager::get_instance();
     }
     if (recovery) {
         frm_manager = std::move(recovery);

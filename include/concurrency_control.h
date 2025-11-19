@@ -62,6 +62,7 @@ public:
     // Menghapus copy constructor dan assignment operator untuk Singleton
     ConcurrencyControlManager(const ConcurrencyControlManager&) = delete;
     ConcurrencyControlManager& operator=(const ConcurrencyControlManager&) = delete;
+    ~ConcurrencyControlManager();
 
     // Method untuk mendapatkan instance singleton
     static ConcurrencyControlManager& get_instance(const std::string& algorithm = "timestamp");
@@ -76,7 +77,6 @@ public:
 private:
     // Constructor private untuk Singleton
     explicit ConcurrencyControlManager(const std::string& algorithm = "timestamp");
-    ~ConcurrencyControlManager();
 
     std::unique_ptr<CCManager> cc_manager_;
     std::string current_algorithm_;

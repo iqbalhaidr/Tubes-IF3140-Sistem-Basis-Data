@@ -54,7 +54,7 @@ public:
 private:
     std::shared_ptr<mdbms::qo::OptimizationEngine> qo_engine;
     std::shared_ptr<mdbms::sm::StorageEngine> sm_engine;
-    std::shared_ptr<mdbms::ccm::ConcurrencyControlManager> ccm_manager;
+    mdbms::ccm::ConcurrencyControlManager* ccm_manager;
     std::shared_ptr<mdbms::fr::FailureRecoveryManager> frm_manager;
 
     int current_transaction_id;
