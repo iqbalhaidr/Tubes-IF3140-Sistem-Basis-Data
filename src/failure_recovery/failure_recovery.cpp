@@ -1,7 +1,27 @@
 #include "failure_recovery.h"
 #include <iostream>
+#include <fstream>
 
 namespace mdbms::fr {
+
+FailureRecoveryManager& FailureRecoveryManager::get_instance() {
+    static FailureRecoveryManager instance;
+    return instance;
+}
+
+FailureRecoveryManager::FailureRecoveryManager() {
+    this->next_log_id = 1;
+    this->next_checkpoint_id = 1;
+    this->log_file_path = "data/wal.log";
+    std::cout << "FRM: Konstruktor FailureRecoveryManager dipanggil (stub)..." << std::endl;
+}
+
+FailureRecoveryManager::~FailureRecoveryManager() {
+    std::cout << "FRM: Destruktor FailureRecoveryManager dipanggil (stub)..." << std::endl;
+    std::lock_guard<std::mutex> lock(this->mtx);
+    flush_buffer();
+    std::cout << "FRM: Checkpoint terakhir disimpan sebelum keluar (stub)..." << std::endl;
+}
 
 void FailureRecoveryManager::write_log(const ExecutionResult& info) {
     std::cout << "FRM: Menulis log untuk query: " << info.query << " (stub)..." << std::endl;
@@ -9,6 +29,8 @@ void FailureRecoveryManager::write_log(const ExecutionResult& info) {
 
 void FailureRecoveryManager::save_checkpoint() {
     std::cout << "FRM: Menyimpan checkpoint (stub)..." << std::endl;
+    std::lock_guard<std::mutex> lock(this->mtx);
+    flush_buffer();
 }
 
 void FailureRecoveryManager::recover(const RecoverCriteria&) {
@@ -60,7 +82,6 @@ std::string FailureRecoveryManager::row_to_string(const Row& row) {
 Row FailureRecoveryManager::string_to_row(const std::string& row_string, const std::string& table_name) {
     Row row;
     row.table_name = table_name;
-    std::cout << "table_name: " << row.table_name << std::endl;
 
     if (row_string == "EMPTY") {
         row.row_id = -1;
@@ -80,7 +101,6 @@ Row FailureRecoveryManager::string_to_row(const std::string& row_string, const s
     // Parse Row ID
     std::string id_str = row_string.substr(0, delimiter_pos);
     row.row_id = std::stoi(id_str);
-    std::cout << "row_id: " << row.row_id << std::endl;
 
     // Parse Columns
     std::string content = row_string.substr(delimiter_pos + 1);
@@ -97,7 +117,6 @@ Row FailureRecoveryManager::string_to_row(const std::string& row_string, const s
             std::string val = pair_str.substr(kv_sep + 1);
 
             row.columns[atr] = string_to_any(val, DataType::VARCHAR);
-            std::cout << "{" << atr << ", " << val << "}" << std::endl;
         }
     }
 
@@ -160,29 +179,13 @@ LogEntry FailureRecoveryManager::deserialize_log(const std::string& serialized_l
 
     try {
         entry.log_id = std::stoi(parts[0]);
-        std::cout << "log_id " << entry.log_id << std::endl;
-
         entry.transaction_id = std::stoi(parts[1]);
-        std::cout << "tx_id " << entry.transaction_id << std::endl;
-
         entry.timestamp = static_cast<std::time_t>(std::stoll(parts[2]));
-        std::cout << "timestamp " << entry.timestamp << std::endl;
-
         entry.operation = string_to_operation(parts[3]);
-        std::cout << "op " << parts[3] << std::endl;
-
         entry.table_name = (parts[4] == "NON_TABLE") ? "" : parts[4];
-        std::cout << "log_id " << entry.table_name << std::endl;
-
         entry.old_value = string_to_row(parts[5], entry.table_name);
-        std::cout << "old value keluar " << std::endl;
-
         entry.new_value = string_to_row(parts[6], entry.table_name);
-        std::cout << "new value keluar" << std::endl;
-
         entry.query = parts[7];
-        std::cout << "log_id " << entry.log_id << std::endl;
-
 
     } catch (const std::exception& e) {
         std::cerr << "FRM Error: Gagal parsing log entry -> " << e.what() << std::endl;
@@ -233,6 +236,35 @@ std::vector<LogEntry> FailureRecoveryManager::read_all_logs(const std::string& f
     infile.close();
     std::cout << "FRM: Berhasil memuat " << logs.size() << " entri log dari disk." << std::endl;
     return logs;
+}
+
+void FailureRecoveryManager::flush_buffer() {
+    if (this->log_buffer.empty()) {
+            return;
+        }
+
+    std::ofstream log_file(this->log_file_path, std::ios::app);
+
+    if (!log_file.is_open()) {
+        std::cerr << "FRM: Gagal membuka file log untuk penulisan: " << this->log_file_path << std::endl;
+        return;
+    }
+
+    int count = 0;
+    for (const auto& entry : this->log_buffer) {
+        // TODO (Anggota 2): Ganti dengan serialize_log(entry)
+        // Format Sementara: ID,TransactionID,Table
+        // log_file << entry.log_id << "," 
+        //             << entry.transaction_id << "," 
+        //             << entry.table_name << "," 
+        //             << "PENDING_SERIALIZER" << "\n";
+        log_file << serialize_log(entry) << "\n";
+        count++;
+    }
+
+    log_file.close();
+    this->log_buffer.clear();
+    std::cout << "FRM: Flush log buffer ke file " << this->log_file_path << " (stub)..." << std::endl;
 }
 
 } // namespace mdbms::fr

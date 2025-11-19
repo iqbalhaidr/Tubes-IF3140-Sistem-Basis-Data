@@ -1,23 +1,29 @@
 #pragma once
-#include "types.h"
 #include <vector>
 #include <ctime>
 #include <string>
 #include <sstream>
-#include <fstream>
+#include <mutex>
+#include "types.h"
 
 namespace mdbms::fr {
 
 class FailureRecoveryManager {
 public:
+    static FailureRecoveryManager& get_instance();
+    FailureRecoveryManager(const FailureRecoveryManager&) = delete;
+    FailureRecoveryManager& operator=(const FailureRecoveryManager&) = delete;
+    ~FailureRecoveryManager();
     void write_log(const ExecutionResult& info);
     void save_checkpoint();
     void recover(const RecoverCriteria& criteria);
-    
-    private:
+
+private:
+    FailureRecoveryManager();
     std::vector<LogEntry> log_buffer;
     std::vector<CheckpointInfo> checkpoints;
     std::string log_file_path;
+    std::mutex mtx;
     int next_log_id;
     int next_checkpoint_id;
     
@@ -45,6 +51,8 @@ public:
     // Fungsi menulis dan membaca log file
     void append_log_to_file(const std::string& serialized_log, const std::string& file_path);
     std::vector<LogEntry> read_all_logs(const std::string& file_path);
+    
+    void flush_buffer();
 };
 
 } // namespace mdbms::fr
