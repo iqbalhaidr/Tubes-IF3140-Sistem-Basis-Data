@@ -663,62 +663,60 @@ int QueryProcessor::begin_transaction() {
     return tid;
 }
 
-// TODO
 bool QueryProcessor::commit_transaction(int transaction_id) {
-    // if (transaction_id == -1) {
-    //     std::cerr << "[QueryProcessor] No active transaction to commit" << std::endl;
-    //     return false;
-    // }
+    if (transaction_id == -1) {
+        std::cerr << "QP: No active transaction to commit" << std::endl;
+        return false;
+    }
 
-    // std::cout << "[QueryProcessor] Committing transaction " << transaction_id << std::endl;
+    std::cout << "QP: Committing transaction " << transaction_id << std::endl;
 
-    // // End transaction in CCM
-    // if (ccm_manager) {
-    //     ccm_manager->end_transaction(transaction_id, true);  // true = commit
-    // }
+    // End transaction in CCM
+    if (ccm_manager) {
+        ccm_manager->end_transaction(transaction_id);
+    }
 
-    // // Log to recovery manager
-    // if (frm_manager) {
-    //     ExecutionResult log_entry;
-    //     log_entry.transaction_id = transaction_id;
-    //     log_entry.query = "COMMIT";
-    //     log_entry.timestamp = std::time(nullptr);
-    //     log_entry.success = true;
-    //     frm_manager->write_log(log_entry);
-    // }
+    // Log to recovery manager
+    if (frm_manager) {
+        ExecutionResult log_entry;
+        log_entry.transaction_id = transaction_id;
+        log_entry.query = "COMMIT";
+        log_entry.timestamp = std::time(nullptr);
+        log_entry.success = true;
+        frm_manager->write_log(log_entry);
+    }
 
     return true;
 }
 
-// TODO
 bool QueryProcessor::abort_transaction(int transaction_id) {
-    // if (transaction_id == -1) {
-    //     std::cerr << "[QueryProcessor] No active transaction to abort" << std::endl;
-    //     return false;
-    // }
+    if (transaction_id == -1) {
+        std::cerr << "QP: No active transaction to abort" << std::endl;
+        return false;
+    }
 
-    // std::cout << "[QueryProcessor] Aborting transaction " << transaction_id << std::endl;
+    std::cout << "QP: Aborting transaction " << transaction_id << std::endl;
 
-    // // End transaction in CCM
-    // if (ccm_manager) {
-    //     ccm_manager->end_transaction(transaction_id, false);  // false = abort
-    // }
+    // End transaction in CCM
+    if (ccm_manager) {
+        ccm_manager->end_transaction(transaction_id);
+    }
 
-    // // Request recovery manager to UNDO changes
-    // if (frm_manager) {
-    //     RecoverCriteria criteria;
-    //     criteria.transaction_id = transaction_id;
-    //     criteria.use_timestamp = false;
-    //     frm_manager->recover(criteria);
+    // Request recovery manager to UNDO changes
+    if (frm_manager) {
+        RecoverCriteria criteria;
+        criteria.transaction_id = transaction_id;
+        criteria.use_timestamp = false;
+        frm_manager->recover(criteria);
 
-    //     // Log abort
-    //     ExecutionResult log_entry;
-    //     log_entry.transaction_id = transaction_id;
-    //     log_entry.query = "ABORT";
-    //     log_entry.timestamp = std::time(nullptr);
-    //     log_entry.success = true;
-    //     frm_manager->write_log(log_entry);
-    // }
+        // Log abort
+        ExecutionResult log_entry;
+        log_entry.transaction_id = transaction_id;
+        log_entry.query = "ABORT";
+        log_entry.timestamp = std::time(nullptr);
+        log_entry.success = true;
+        frm_manager->write_log(log_entry);
+    }
 
     return true;
 }
