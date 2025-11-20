@@ -1,3 +1,8 @@
+# Build test_concurrency_control
+add_executable(test_concurrency_control test_concurrency_control.cpp)
+target_link_libraries(test_concurrency_control PRIVATE ccm_lib)
+target_include_directories(test_concurrency_control PRIVATE ../include)
+
 # Aktifkan testing
 enable_testing()
 
