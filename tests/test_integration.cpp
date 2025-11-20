@@ -31,17 +31,14 @@ public:
     std::string test_dir;
     std::shared_ptr<mdbms::qo::OptimizationEngine> optimizer;
     std::shared_ptr<mdbms::sm::StorageEngine> storage;
-    std::shared_ptr<mdbms::ccm::ConcurrencyControlManager> ccm;
-    std::shared_ptr<mdbms::fr::FailureRecoveryManager> recovery;
     std::unique_ptr<mdbms::qp::QueryProcessor> qp;
 
     IntegrationTestSetup(const std::string& dir) : test_dir(dir) {
         std::filesystem::create_directory(test_dir);
         optimizer = std::make_shared<mdbms::qo::OptimizationEngine>();
         storage = std::make_shared<mdbms::sm::StorageEngine>(test_dir);
-        // CCM is a singleton, pass nullptr and let QueryProcessor use get_instance()
-        recovery = std::make_shared<mdbms::fr::FailureRecoveryManager>();
-        qp = std::make_unique<mdbms::qp::QueryProcessor>(optimizer, storage, nullptr, recovery);
+        // CCM and FRM are singletons, pass nullptr and let QueryProcessor use get_instance()
+        qp = std::make_unique<mdbms::qp::QueryProcessor>(optimizer, storage, nullptr, nullptr);
     }
 
     ~IntegrationTestSetup() {
@@ -61,10 +58,9 @@ bool test_basic_integration() {
 
     auto optimizer = std::make_shared<mdbms::qo::OptimizationEngine>();
     auto storage = std::make_shared<mdbms::sm::StorageEngine>();
-    // CCM is a singleton, pass nullptr and let QueryProcessor use get_instance()
-    auto recovery = std::make_shared<mdbms::fr::FailureRecoveryManager>();
+    // CCM and FRM are singletons, pass nullptr and let QueryProcessor use get_instance()
 
-    mdbms::qp::QueryProcessor qp(optimizer, storage, nullptr, recovery);
+    mdbms::qp::QueryProcessor qp(optimizer, storage, nullptr, nullptr);
 
     const std::string query = "SELECT * FROM Student";
     std::ostringstream captured_output;
@@ -459,6 +455,157 @@ bool test_multiple_transactions() {
 }
 
 // ============================================================================
+// Test 7: Failure Recovery Manager Integration
+// ============================================================================
+bool test_failure_recovery_integration() {
+    std::cout << "\n=== TEST 7: Failure Recovery Manager Integration ===" << std::endl;
+
+    IntegrationTestSetup setup("test_frm_integration");
+    setup.insert_student_direct(1, "Alice", 3.8f);
+    setup.insert_student_direct(2, "Bob", 3.5f);
+
+    // Test 1: Verify logging for BEGIN transaction
+    std::cout << "  Testing BEGIN transaction logging..." << std::endl;
+    std::ostringstream captured_output;
+    auto* original_buf = std::cout.rdbuf(captured_output.rdbuf());
+    
+    int txn_id = setup.qp->begin_transaction();
+    
+    std::cout.rdbuf(original_buf);
+    const std::string out = captured_output.str();
+
+    if (txn_id < 0) {
+        std::cerr << "[FAIL] Failed to begin transaction" << std::endl;
+        return false;
+    }
+
+    if (out.find("FRM: Menulis log") == std::string::npos && 
+        out.find("FRM: Log ID") == std::string::npos) {
+        std::cerr << "[FAIL] FRM did not log BEGIN transaction" << std::endl;
+        return false;
+    }
+
+    // Test 2: Verify logging for SELECT query
+    std::cout << "  Testing SELECT query logging..." << std::endl;
+    std::ostringstream captured_output2;
+    original_buf = std::cout.rdbuf(captured_output2.rdbuf());
+    
+    auto result = setup.qp->execute_query("SELECT * FROM Student");
+    
+    std::cout.rdbuf(original_buf);
+    const std::string out2 = captured_output2.str();
+
+    if (!result.success) {
+        std::cerr << "[FAIL] SELECT query failed" << std::endl;
+        return false;
+    }
+
+    if (out2.find("FRM: Menulis log") == std::string::npos && 
+        out2.find("FRM: Log ID") == std::string::npos) {
+        std::cerr << "[FAIL] FRM did not log SELECT query" << std::endl;
+        return false;
+    }
+
+    // Test 3: Verify logging for UPDATE with old_value and new_value
+    std::cout << "  Testing UPDATE query logging with old/new values..." << std::endl;
+    std::ostringstream captured_output3;
+    original_buf = std::cout.rdbuf(captured_output3.rdbuf());
+    
+    mdbms::qo::ParsedQuery update_query;
+    update_query.query_type = "UPDATE";
+    update_query.from_tables.push_back("Student");
+    update_query.set_values["GPA"] = 4.0f;
+    update_query.where_conditions.push_back(mdbms::Condition("StudentID", "=", 1));
+    
+    int update_txn = setup.qp->begin_transaction();
+    int affected = setup.qp->execute_update(update_query, update_txn);
+    setup.qp->commit_transaction(update_txn);
+    
+    std::cout.rdbuf(original_buf);
+    const std::string out3 = captured_output3.str();
+
+    if (affected != 1) {
+        std::cerr << "[FAIL] UPDATE affected wrong number of rows: " << affected << std::endl;
+        return false;
+    }
+
+    if (out3.find("FRM: Menulis log") == std::string::npos && 
+        out3.find("FRM: Log ID") == std::string::npos) {
+        std::cerr << "[FAIL] FRM did not log UPDATE query" << std::endl;
+        return false;
+    }
+
+    // Test 4: Verify logging for COMMIT
+    std::cout << "  Testing COMMIT transaction logging..." << std::endl;
+    int commit_txn = setup.qp->begin_transaction();
+    std::ostringstream captured_output4;
+    original_buf = std::cout.rdbuf(captured_output4.rdbuf());
+    
+    bool committed = setup.qp->commit_transaction(commit_txn);
+    
+    std::cout.rdbuf(original_buf);
+    const std::string out4 = captured_output4.str();
+
+    if (!committed) {
+        std::cerr << "[FAIL] Transaction commit failed" << std::endl;
+        return false;
+    }
+
+    if (out4.find("FRM: Menulis log") == std::string::npos && 
+        out4.find("FRM: Log ID") == std::string::npos) {
+        std::cerr << "[FAIL] FRM did not log COMMIT" << std::endl;
+        return false;
+    }
+
+    // Test 5: Verify checkpoint is saved after commit
+    if (out4.find("FRM: Menyimpan checkpoint") == std::string::npos &&
+        out4.find("FRM: Checkpoint") == std::string::npos) {
+        std::cerr << "[FAIL] FRM did not save checkpoint after commit" << std::endl;
+        return false;
+    }
+
+    // Test 6: Verify logging for ABORT and recovery
+    std::cout << "  Testing ABORT transaction and recovery..." << std::endl;
+    int abort_txn = setup.qp->begin_transaction();
+    
+    // Do an UPDATE
+    mdbms::qo::ParsedQuery update_query2;
+    update_query2.query_type = "UPDATE";
+    update_query2.from_tables.push_back("Student");
+    update_query2.set_values["GPA"] = 3.9f;
+    update_query2.where_conditions.push_back(mdbms::Condition("StudentID", "=", 2));
+    setup.qp->execute_update(update_query2, abort_txn);
+    
+    std::ostringstream captured_output5;
+    original_buf = std::cout.rdbuf(captured_output5.rdbuf());
+    
+    bool aborted = setup.qp->abort_transaction(abort_txn);
+    
+    std::cout.rdbuf(original_buf);
+    const std::string out5 = captured_output5.str();
+
+    if (!aborted) {
+        std::cerr << "[FAIL] Transaction abort failed" << std::endl;
+        return false;
+    }
+
+    if (out5.find("FRM: Melakukan recovery") == std::string::npos &&
+        out5.find("FRM: Memulai proses recovery") == std::string::npos) {
+        std::cerr << "[FAIL] FRM did not perform recovery on abort" << std::endl;
+        return false;
+    }
+
+    if (out5.find("FRM: Menulis log") == std::string::npos && 
+        out5.find("FRM: Log ID") == std::string::npos) {
+        std::cerr << "[FAIL] FRM did not log ABORT" << std::endl;
+        return false;
+    }
+
+    std::cout << "[PASS] Failure Recovery Manager integration test" << std::endl;
+    return true;
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 int main() {
@@ -468,7 +615,7 @@ int main() {
     std::cout << "========================================" << std::endl;
 
     int passed = 0;
-    int total = 6;
+    int total = 7;
 
     if (test_basic_integration()) passed++;
     if (test_query_optimizer_integration()) passed++;
@@ -476,6 +623,7 @@ int main() {
     if (test_concurrency_control_integration()) passed++;
     if (test_full_workflow()) passed++;
     if (test_multiple_transactions()) passed++;
+    if (test_failure_recovery_integration()) passed++;
 
     std::cout << "\n========================================" << std::endl;
     std::cout << "  Results: " << passed << "/" << total << " tests passed" << std::endl;

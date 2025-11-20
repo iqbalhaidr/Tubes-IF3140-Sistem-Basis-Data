@@ -55,8 +55,8 @@ public:
 private:
     std::shared_ptr<mdbms::qo::OptimizationEngine> qo_engine;
     std::shared_ptr<mdbms::sm::StorageEngine> sm_engine;
-    mdbms::ccm::ConcurrencyControlManager* ccm_manager;
-    std::shared_ptr<mdbms::fr::FailureRecoveryManager> frm_manager;
+    mdbms::ccm::ConcurrencyControlManager* ccm_manager;  // Singleton - non-owning pointer
+    mdbms::fr::FailureRecoveryManager* frm_manager;  // Singleton - non-owning pointer
 
     int current_transaction_id;
 

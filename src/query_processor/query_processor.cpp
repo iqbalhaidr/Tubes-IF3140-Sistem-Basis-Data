@@ -31,9 +31,9 @@ QueryProcessor::QueryProcessor(std::shared_ptr<mdbms::qo::OptimizationEngine> op
         ccm_manager = &mdbms::ccm::ConcurrencyControlManager::get_instance();
     }
     if (recovery) {
-        frm_manager = std::move(recovery);
+        frm_manager = recovery.get();
     } else {
-        frm_manager = std::make_shared<mdbms::fr::FailureRecoveryManager>();
+        frm_manager = &mdbms::fr::FailureRecoveryManager::get_instance();
     }
 
     std::cout << "QP: Query Processor initialized" << std::endl;
@@ -612,20 +612,35 @@ int QueryProcessor::execute_update(const mdbms::qo::ParsedQuery& parsed_query, i
 
         std::cout << "QP: Updated " << affected_rows << " rows in " << table_name << std::endl;
 
-        // Log to Failure Recovery Manager (nunggu integrasi FRM)
+        // Log to Failure Recovery Manager
         if (frm_manager && affected_rows > 0) {
-            LogEntry log_entry;
-            log_entry.transaction_id = transaction_id;
-            log_entry.timestamp = std::time(nullptr);
-            log_entry.operation = Operation::UPDATE;
-            log_entry.table_name = table_name;
-            log_entry.query = parsed_query.original_query;
-
-            // Store old and new values untuk rollback
-            if (!rows_to_update.data.empty()) {
-                log_entry.old_value = rows_to_update.data[0];
+            ExecutionResult log_result;
+            log_result.transaction_id = transaction_id;
+            log_result.timestamp = std::time(nullptr);
+            // Use original_query if available, otherwise construct a query string
+            if (!parsed_query.original_query.empty()) {
+                log_result.query = parsed_query.original_query;
+            } else {
+                log_result.query = "UPDATE " + table_name;
             }
-            log_entry.new_value = update_data.new_value;
+            log_result.success = true;
+            log_result.affected_rows = affected_rows;
+            
+            // Store old and new values for rollback in ExecutionResult.data
+            // FRM will extract old_value and new_value from ExecutionResult
+            if (!rows_to_update.data.empty()) {
+                // Store old value as first row in data
+                log_result.data.data.push_back(rows_to_update.data[0]);
+                // Store new value as second row (if needed, FRM will use it)
+                Row new_row = rows_to_update.data[0];
+                for (const auto& [col_name, new_value] : parsed_query.set_values) {
+                    new_row.columns[col_name] = new_value;
+                }
+                log_result.data.data.push_back(new_row);
+            }
+            log_result.data.rows_count = static_cast<int>(log_result.data.data.size());
+            
+            frm_manager->write_log(log_result);
         }
 
     } catch (const std::exception& e) {
@@ -684,6 +699,9 @@ bool QueryProcessor::commit_transaction(int transaction_id) {
         log_entry.timestamp = std::time(nullptr);
         log_entry.success = true;
         frm_manager->write_log(log_entry);
+        
+        // Save checkpoint after commit
+        frm_manager->save_checkpoint();
     }
 
     return true;
