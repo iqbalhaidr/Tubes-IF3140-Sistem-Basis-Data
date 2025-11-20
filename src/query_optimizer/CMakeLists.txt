@@ -5,6 +5,7 @@ add_library(qo_lib STATIC
     parser/string_utils.cpp
     tree/plan_tree.cpp
     optimizer/optimizer_rules.cpp
+    optimizer/optimizer_helper.cpp
     cost/cost_model.cpp
 )
 

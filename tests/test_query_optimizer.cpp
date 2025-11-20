@@ -3,6 +3,11 @@
 #include <iostream>
 #include <iomanip>
 
+// Cara test:
+//   cmake -S . -B build
+//   cmake --build build --target test_query_optimizer
+//   ./build/src/test_query_optimizer
+
 void print_tree(const mdbms::qo::QueryTree* node, const std::string& prefix = "", bool is_last = true, int level = 0) {
     if (!node) return;
     
@@ -43,7 +48,7 @@ int main() {
     mdbms::qo::OptimizationEngine opt;
 
     const std::string query =
-        "SELECT s.name, d.nama FROM student s JOIN dept d ON s.dept_id = d.id JOIN apt a ON a_id = s.dept_id WHERE s.age > 20 AND d.size >= 10 AND a.name = 'bebek' s.name";
+        "SELECT s.name, s.age, s.address, d.nama, d.size, a.name, a.type FROM student s JOIN dept d ON s.dept_id = d.id JOIN apt a ON a.id = s.apt_id WHERE s.age > 20 AND s.age < 60 AND d.size >= 10 AND d.location = 'Jakarta' AND a.name = 'bebek' AND a.active = 1;";
 
     std::cout << "Original Query:\n";
     std::cout << "  " << query << "\n\n";
@@ -51,11 +56,11 @@ int main() {
     mdbms::qo::ParsedQuery parsed_query = opt.parse_query(query);
     std::cout << "SELECT columns: ";
     for (const auto& column : parsed_query.select_columns) {
-        std::cout << column << ' ';
+        std::cout << column << ';';
     }
     std::cout << "\n\nFROM tables: ";
     for (const auto& table : parsed_query.from_tables) {
-        std::cout << table << ' ';
+        std::cout << table << ';';
     }
     std::cout << "\n\nJOIN pairs:\n";
     for (size_t i = 0; i < parsed_query.join_pairs.size(); ++i) {
@@ -71,7 +76,17 @@ int main() {
     if (!parsed_query.query_tree) {
         std::cout << "ERROR: Query tree is null\n";
     } else {
+        std::cout << "Initial Query Tree:\n";
         print_tree(parsed_query.query_tree);
+        std::cout << "\n";
+        
+        mdbms::qo::ParsedQuery optimized_query = opt.optimize_query(parsed_query);  
+        if (!optimized_query.query_tree) {
+            std::cout << "ERROR: Optimized query tree is null\n";
+        } else {
+            std::cout << "Optimized Query Tree:\n";
+            print_tree(optimized_query.query_tree);
+        }
     }
 
     return 0;
