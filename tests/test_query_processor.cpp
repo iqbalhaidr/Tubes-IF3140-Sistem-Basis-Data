@@ -927,8 +927,218 @@ bool test_join_on() {
     return true;
 }
 
+bool test_execute_select_basic() {
+    std::cout << "\n=== TEST 17: Execute SELECT Basic ===" << std::endl;
+
+    TestSetup setup("qp_test_exec_select_basic");
+    setup.insert_student(1, "Alice", 3.8f);
+    setup.insert_student(2, "Bob", 3.0f);
+    setup.insert_student(3, "Charlie", 3.5f);
+    setup.insert_student(4, "Diana", 3.5f);
+    setup.insert_student(5, "Alice", 2.5f);
+    setup.insert_student(6, "Frank", 3.7f);
+    setup.insert_student(7, "Grace", 3.4f);
+    setup.insert_student(8, "Henry", 2.8f);
+    setup.insert_student(9, "Ivy", 3.6f);
+    setup.insert_student(10, "Alice", 3.1f);
+
+    // Create ParsedQuery for SELECT * FROM Student
+    mdbms::qo::ParsedQuery select_query;
+    select_query.query_type = "SELECT";
+    select_query.select_columns = {"*"};
+    select_query.from_tables.push_back("Student");
+
+    int txn_id = setup.qp->begin_transaction();
+    auto result = setup.qp->execute_select(select_query, txn_id);
+
+    std::cout << "SELECT * FROM Student:" << std::endl;
+    print_rows(result);
+
+    if (result.rows_count != 10) {
+        std::cerr << "[FAIL] Expected 10 rows, got " << result.rows_count << "\n";
+        return false;
+    }
+
+    std::cout << "[PASS] Execute SELECT Basic test\n";
+    return true;
+}
+
+bool test_execute_select_with_where() {
+    std::cout << "\n=== TEST 18: Execute SELECT with WHERE ===" << std::endl;
+
+    TestSetup setup("qp_test_exec_select_where");
+    setup.insert_student(1, "Alice", 3.8f);
+    setup.insert_student(2, "Bob", 3.0f);
+    setup.insert_student(3, "Charlie", 3.5f);
+    setup.insert_student(4, "Diana", 3.5f);
+    setup.insert_student(5, "Alice", 2.5f);
+    setup.insert_student(6, "Frank", 3.7f);
+    setup.insert_student(7, "Grace", 3.4f);
+    setup.insert_student(8, "Henry", 2.8f);
+    setup.insert_student(9, "Ivy", 3.6f);
+    setup.insert_student(10, "Alice", 3.1f);
+
+    // Create ParsedQuery for SELECT * FROM Student WHERE GPA > 3.5
+    mdbms::qo::ParsedQuery select_query;
+    select_query.query_type = "SELECT";
+    select_query.select_columns = {"*"};
+    select_query.from_tables.push_back("Student");
+    select_query.where_conditions.push_back(mdbms::Condition("GPA", ">", 3.5f));
+
+    int txn_id = setup.qp->begin_transaction();
+    auto result = setup.qp->execute_select(select_query, txn_id);
+
+    std::cout << "SELECT * FROM Student WHERE GPA > 3.5:" << std::endl;
+    print_rows(result);
+
+    // Should get: Alice (3.8), Frank (3.7), Ivy (3.6) = 3 rows
+    if (result.rows_count != 3) {
+        std::cerr << "[FAIL] Expected 3 rows, got " << result.rows_count << "\n";
+        return false;
+    }
+
+    std::cout << "[PASS] Execute SELECT with WHERE test\n";
+    return true;
+}
+
+bool test_execute_select_with_order_by() {
+    std::cout << "\n=== TEST 19: Execute SELECT with ORDER BY ===" << std::endl;
+
+    TestSetup setup("qp_test_exec_select_orderby");
+    setup.insert_student(1, "Alice", 3.8f);
+    setup.insert_student(2, "Bob", 3.0f);
+    setup.insert_student(3, "Charlie", 3.5f);
+    setup.insert_student(4, "Diana", 3.5f);
+    setup.insert_student(5, "Alice", 2.5f);
+    setup.insert_student(6, "Frank", 3.7f);
+    setup.insert_student(7, "Grace", 3.4f);
+    setup.insert_student(8, "Henry", 2.8f);
+    setup.insert_student(9, "Ivy", 3.6f);
+    setup.insert_student(10, "Alice", 3.1f);
+
+    // Create ParsedQuery for SELECT * FROM Student ORDER BY GPA DESC
+    mdbms::qo::ParsedQuery select_query;
+    select_query.query_type = "SELECT";
+    select_query.select_columns = {"*"};
+    select_query.from_tables.push_back("Student");
+    select_query.order_by_column = "GPA";
+    select_query.order_ascending = false;
+
+    int txn_id = setup.qp->begin_transaction();
+    auto result = setup.qp->execute_select(select_query, txn_id);
+
+    std::cout << "SELECT * FROM Student ORDER BY GPA DESC:" << std::endl;
+    print_rows(result);
+
+    if (result.rows_count != 10) {
+        std::cerr << "[FAIL] Expected 10 rows, got " << result.rows_count << "\n";
+        return false;
+    }
+
+    // Check first row has highest GPA (3.8)
+    float first_gpa = std::any_cast<float>(result.data[0].columns.at("GPA"));
+    if (first_gpa < 3.75f) {
+        std::cerr << "[FAIL] First row should have highest GPA (3.8), got " << first_gpa << "\n";
+        return false;
+    }
+
+    std::cout << "[PASS] Execute SELECT with ORDER BY test\n";
+    return true;
+}
+
+bool test_execute_select_with_limit() {
+    std::cout << "\n=== TEST 20: Execute SELECT with LIMIT ===" << std::endl;
+
+    TestSetup setup("qp_test_exec_select_limit");
+    setup.insert_student(1, "Alice", 3.8f);
+    setup.insert_student(2, "Bob", 3.0f);
+    setup.insert_student(3, "Charlie", 3.5f);
+    setup.insert_student(4, "Diana", 3.5f);
+    setup.insert_student(5, "Alice", 2.5f);
+    setup.insert_student(6, "Frank", 3.7f);
+    setup.insert_student(7, "Grace", 3.4f);
+    setup.insert_student(8, "Henry", 2.8f);
+    setup.insert_student(9, "Ivy", 3.6f);
+    setup.insert_student(10, "Alice", 3.1f);
+
+    // Create ParsedQuery for SELECT * FROM Student LIMIT 3
+    mdbms::qo::ParsedQuery select_query;
+    select_query.query_type = "SELECT";
+    select_query.select_columns = {"*"};
+    select_query.from_tables.push_back("Student");
+    select_query.limit_value = 3;
+
+    int txn_id = setup.qp->begin_transaction();
+    auto result = setup.qp->execute_select(select_query, txn_id);
+
+    std::cout << "SELECT * FROM Student LIMIT 3:" << std::endl;
+    print_rows(result);
+
+    if (result.rows_count != 3) {
+        std::cerr << "[FAIL] Expected 3 rows, got " << result.rows_count << "\n";
+        return false;
+    }
+
+    std::cout << "[PASS] Execute SELECT with LIMIT test\n";
+    return true;
+}
+
+bool test_execute_select_combined() {
+    std::cout << "\n=== TEST 21: Execute SELECT Combined (WHERE + ORDER BY + LIMIT) ===" << std::endl;
+
+    TestSetup setup("qp_test_exec_select_combined");
+    setup.insert_student(1, "Alice", 3.8f);
+    setup.insert_student(2, "Bob", 3.0f);
+    setup.insert_student(3, "Charlie", 3.5f);
+    setup.insert_student(4, "Diana", 3.5f);
+    setup.insert_student(5, "Alice", 2.5f);
+    setup.insert_student(6, "Frank", 3.7f);
+    setup.insert_student(7, "Grace", 3.4f);
+    setup.insert_student(8, "Henry", 2.8f);
+    setup.insert_student(9, "Ivy", 3.6f);
+    setup.insert_student(10, "Alice", 3.1f);
+
+    // Create ParsedQuery for SELECT * FROM Student WHERE GPA > 3.0 ORDER BY GPA DESC LIMIT 5
+    mdbms::qo::ParsedQuery select_query;
+    select_query.query_type = "SELECT";
+    select_query.select_columns = {"*"};
+    select_query.from_tables.push_back("Student");
+    select_query.where_conditions.push_back(mdbms::Condition("GPA", ">", 3.0f));
+    select_query.order_by_column = "GPA";
+    select_query.order_ascending = false;
+    select_query.limit_value = 5;
+
+    int txn_id = setup.qp->begin_transaction();
+    auto result = setup.qp->execute_select(select_query, txn_id);
+
+    std::cout << "SELECT * FROM Student WHERE GPA > 3.0 ORDER BY GPA DESC LIMIT 5:" << std::endl;
+    print_rows(result);
+
+    if (result.rows_count != 5) {
+        std::cerr << "[FAIL] Expected 5 rows, got " << result.rows_count << "\n";
+        return false;
+    }
+
+    // Check first row has highest GPA (3.8)
+    float first_gpa = std::any_cast<float>(result.data[0].columns.at("GPA"));
+    float last_gpa = std::any_cast<float>(result.data[4].columns.at("GPA"));
+
+    if (first_gpa < 3.75f) {
+        std::cerr << "[FAIL] First row should have GPA 3.8, got " << first_gpa << "\n";
+        return false;
+    }
+
+    if (first_gpa < last_gpa) {
+        std::cerr << "[FAIL] Results not sorted DESC. First=" << first_gpa << ", Last=" << last_gpa << "\n";
+        return false;
+    }
+
+    std::cout << "[PASS] Execute SELECT Combined test\n";
+    return true;
+}
+
 bool test_update_single_column() {
-    std::cout << "\n=== TEST 17: UPDATE Single Column ===" << std::endl;
+    std::cout << "\n=== TEST 22: UPDATE Single Column ===" << std::endl;
 
     TestSetup setup("qp_test_update_single");
     setup.insert_student(1, "Alice", 3.8f);
@@ -991,7 +1201,7 @@ bool test_update_single_column() {
 }
 
 bool test_update_multiple_rows() {
-    std::cout << "\n=== TEST 18: UPDATE Multiple Rows ===" << std::endl;
+    std::cout << "\n=== TEST 23: UPDATE Multiple Rows ===" << std::endl;
 
     TestSetup setup("qp_test_update_multi");
     setup.insert_student(1, "Alice", 3.8f);
@@ -1049,7 +1259,7 @@ bool test_update_multiple_rows() {
 }
 
 bool test_update_with_string_condition() {
-    std::cout << "\n=== TEST 19: UPDATE with String Condition ===" << std::endl;
+    std::cout << "\n=== TEST 24: UPDATE with String Condition ===" << std::endl;
 
     TestSetup setup("qp_test_update_str");
     setup.insert_student(1, "Alice", 3.8f);
@@ -1105,7 +1315,7 @@ bool test_update_with_string_condition() {
 }
 
 bool test_natural_join() {
-    std::cout << "\n=== TEST 20: NATURAL JOIN ===" << std::endl;
+    std::cout << "\n=== TEST 25: NATURAL JOIN ===" << std::endl;
 
     TestSetup setup("qp_test_natural_join");
 
@@ -1243,7 +1453,7 @@ int main() {
     std::cout << "===================================" << std::endl;
 
     int passed = 0;
-    int total = 20;
+    int total = 25;
 
     if (test_basic_integration()) passed++;
     if (test_begin_transaction()) passed++;
@@ -1261,6 +1471,11 @@ int main() {
     if (test_combined_where_orderby_limit()) passed++;
     if (test_cartesian_product()) passed++;
     if (test_join_on()) passed++;
+    if (test_execute_select_basic()) passed++;
+    if (test_execute_select_with_where()) passed++;
+    if (test_execute_select_with_order_by()) passed++;
+    if (test_execute_select_with_limit()) passed++;
+    if (test_execute_select_combined()) passed++;
     if (test_update_single_column()) passed++;
     if (test_update_multiple_rows()) passed++;
     if (test_update_with_string_condition()) passed++;
