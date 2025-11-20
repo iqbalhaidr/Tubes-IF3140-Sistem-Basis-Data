@@ -237,9 +237,12 @@ bool test_limit() {
 
     auto all_rows = setup.read_all_students();
 
+    std::cout << "Before LIMIT:" << std::endl;
+    print_rows(all_rows);
+
     auto limited = setup.qp->apply_limit(all_rows, 5);
 
-    std::cout << "SELECT * FROM Student LIMIT 5:" << std::endl;
+    std::cout << "\nAfter LIMIT 5:" << std::endl;
     print_rows(limited);
 
     if (limited.rows_count != 5) {
@@ -267,9 +270,13 @@ bool test_order_by_string_asc() {
     setup.insert_student(10, "Alice", 3.1f);
 
     auto rows = setup.read_all_students();
+
+    std::cout << "Before ORDER BY:" << std::endl;
+    print_rows(rows);
+
     auto sorted = setup.qp->apply_order_by(rows, "FullName", true);
 
-    std::cout << "ORDER BY FullName ASC:" << std::endl;
+    std::cout << "\nAfter ORDER BY FullName ASC:" << std::endl;
     print_rows(sorted);
 
     std::string first = std::any_cast<std::string>(sorted.data[0].columns.at("FullName"));
@@ -300,9 +307,13 @@ bool test_order_by_string_desc() {
     setup.insert_student(10, "Alice", 3.1f);
 
     auto rows = setup.read_all_students();
+
+    std::cout << "Before ORDER BY:" << std::endl;
+    print_rows(rows);
+
     auto sorted = setup.qp->apply_order_by(rows, "FullName", false);
 
-    std::cout << "ORDER BY FullName DESC:" << std::endl;
+    std::cout << "\nAfter ORDER BY FullName DESC:" << std::endl;
     print_rows(sorted);
 
     std::string first = std::any_cast<std::string>(sorted.data[0].columns.at("FullName"));
@@ -333,9 +344,13 @@ bool test_order_by_int_asc() {
     setup.insert_student(9, "Ivy", 3.6f);
 
     auto rows = setup.read_all_students();
+
+    std::cout << "Before ORDER BY:" << std::endl;
+    print_rows(rows);
+
     auto sorted = setup.qp->apply_order_by(rows, "StudentID", true);
 
-    std::cout << "ORDER BY StudentID ASC:" << std::endl;
+    std::cout << "\nAfter ORDER BY StudentID ASC:" << std::endl;
     print_rows(sorted);
 
     int first = std::any_cast<int>(sorted.data[0].columns.at("StudentID"));
@@ -366,9 +381,13 @@ bool test_order_by_int_desc() {
     setup.insert_student(9, "Ivy", 3.6f);
 
     auto rows = setup.read_all_students();
+
+    std::cout << "Before ORDER BY:" << std::endl;
+    print_rows(rows);
+
     auto sorted = setup.qp->apply_order_by(rows, "StudentID", false);
 
-    std::cout << "ORDER BY StudentID DESC:" << std::endl;
+    std::cout << "\nAfter ORDER BY StudentID DESC:" << std::endl;
     print_rows(sorted);
 
     int first = std::any_cast<int>(sorted.data[0].columns.at("StudentID"));
@@ -399,9 +418,13 @@ bool test_order_by_float_asc() {
     setup.insert_student(10, "Alice", 3.1f);
 
     auto rows = setup.read_all_students();
+
+    std::cout << "Before ORDER BY:" << std::endl;
+    print_rows(rows);
+
     auto sorted = setup.qp->apply_order_by(rows, "GPA", true);
 
-    std::cout << "ORDER BY GPA ASC:" << std::endl;
+    std::cout << "\nAfter ORDER BY GPA ASC:" << std::endl;
     print_rows(sorted);
 
     float first = std::any_cast<float>(sorted.data[0].columns.at("GPA"));
@@ -432,9 +455,13 @@ bool test_order_by_float_desc() {
     setup.insert_student(10, "Alice", 3.1f);
 
     auto rows = setup.read_all_students();
+
+    std::cout << "Before ORDER BY:" << std::endl;
+    print_rows(rows);
+
     auto sorted = setup.qp->apply_order_by(rows, "GPA", false);
 
-    std::cout << "ORDER BY GPA DESC:" << std::endl;
+    std::cout << "\nAfter ORDER BY GPA DESC:" << std::endl;
     print_rows(sorted);
 
     float first = std::any_cast<float>(sorted.data[0].columns.at("GPA"));
@@ -465,6 +492,10 @@ bool test_where_integer_operators() {
     setup.insert_student(10, "Alice", 3.1f);
 
     auto rows = setup.read_all_students();
+
+    std::cout << "All Students:" << std::endl;
+    print_rows(rows);
+    std::cout << std::endl;
 
     // Test = operator
     std::vector<mdbms::Condition> cond_eq;
@@ -553,6 +584,10 @@ bool test_where_float_operators() {
 
     auto rows = setup.read_all_students();
 
+    std::cout << "All Students:" << std::endl;
+    print_rows(rows);
+    std::cout << std::endl;
+
     // Test = operator
     std::vector<mdbms::Condition> cond_eq;
     cond_eq.push_back(mdbms::Condition("GPA", "=", 3.5f));
@@ -631,14 +666,18 @@ bool test_where_string_operators() {
     setup.insert_student(2, "Bob", 3.0f);
     setup.insert_student(3, "Charlie", 3.5f);
     setup.insert_student(4, "Diana", 3.5f);
-    setup.insert_student(5, "Alice", 2.5f);  
+    setup.insert_student(5, "Alice", 2.5f);
     setup.insert_student(6, "Frank", 3.7f);
     setup.insert_student(7, "Grace", 3.4f);
     setup.insert_student(8, "Henry", 2.8f);
     setup.insert_student(9, "Ivy", 3.6f);
-    setup.insert_student(10, "Alice", 3.1f); 
+    setup.insert_student(10, "Alice", 3.1f);
 
     auto rows = setup.read_all_students();
+
+    std::cout << "All Students:" << std::endl;
+    print_rows(rows);
+    std::cout << std::endl;
 
     // Test = operator
     std::vector<mdbms::Condition> cond_eq;
@@ -727,6 +766,10 @@ bool test_where_multiple_conditions() {
 
     auto rows = setup.read_all_students();
 
+    std::cout << "All Students:" << std::endl;
+    print_rows(rows);
+    std::cout << std::endl;
+
     // Test multiple conditions: GPA > 3.0 AND StudentID < 6
     std::vector<mdbms::Condition> conditions;
     conditions.push_back(mdbms::Condition("GPA", ">", 3.0f));
@@ -779,6 +822,10 @@ bool test_combined_where_orderby_limit() {
 
     auto rows = setup.read_all_students();
 
+    std::cout << "All Students:" << std::endl;
+    print_rows(rows);
+    std::cout << std::endl;
+
     // WHERE GPA > 3.0
     std::vector<mdbms::Condition> conditions;
     conditions.push_back(mdbms::Condition("GPA", ">", 3.0f));
@@ -790,7 +837,7 @@ bool test_combined_where_orderby_limit() {
     // LIMIT 5
     auto limited = setup.qp->apply_limit(sorted, 5);
 
-    std::cout << "WHERE GPA > 3.0 ORDER BY GPA DESC LIMIT 5:" << std::endl;
+    std::cout << "Final Result - WHERE GPA > 3.0 ORDER BY GPA DESC LIMIT 5:" << std::endl;
     print_rows(limited);
 
     if (limited.rows_count != 5) {
@@ -951,7 +998,7 @@ bool test_execute_select_basic() {
     int txn_id = setup.qp->begin_transaction();
     auto result = setup.qp->execute_select(select_query, txn_id);
 
-    std::cout << "SELECT * FROM Student:" << std::endl;
+    std::cout << "Result - SELECT * FROM Student:" << std::endl;
     print_rows(result);
 
     if (result.rows_count != 10) {
@@ -988,7 +1035,7 @@ bool test_execute_select_with_where() {
     int txn_id = setup.qp->begin_transaction();
     auto result = setup.qp->execute_select(select_query, txn_id);
 
-    std::cout << "SELECT * FROM Student WHERE GPA > 3.5:" << std::endl;
+    std::cout << "Result - SELECT * FROM Student WHERE GPA > 3.5:" << std::endl;
     print_rows(result);
 
     // Should get: Alice (3.8), Frank (3.7), Ivy (3.6) = 3 rows
@@ -1027,7 +1074,7 @@ bool test_execute_select_with_order_by() {
     int txn_id = setup.qp->begin_transaction();
     auto result = setup.qp->execute_select(select_query, txn_id);
 
-    std::cout << "SELECT * FROM Student ORDER BY GPA DESC:" << std::endl;
+    std::cout << "Result - SELECT * FROM Student ORDER BY GPA DESC:" << std::endl;
     print_rows(result);
 
     if (result.rows_count != 10) {
@@ -1071,7 +1118,7 @@ bool test_execute_select_with_limit() {
     int txn_id = setup.qp->begin_transaction();
     auto result = setup.qp->execute_select(select_query, txn_id);
 
-    std::cout << "SELECT * FROM Student LIMIT 3:" << std::endl;
+    std::cout << "Result - SELECT * FROM Student LIMIT 3:" << std::endl;
     print_rows(result);
 
     if (result.rows_count != 3) {
@@ -1111,7 +1158,7 @@ bool test_execute_select_combined() {
     int txn_id = setup.qp->begin_transaction();
     auto result = setup.qp->execute_select(select_query, txn_id);
 
-    std::cout << "SELECT * FROM Student WHERE GPA > 3.0 ORDER BY GPA DESC LIMIT 5:" << std::endl;
+    std::cout << "Result - SELECT * FROM Student WHERE GPA > 3.0 ORDER BY GPA DESC LIMIT 5:" << std::endl;
     print_rows(result);
 
     if (result.rows_count != 5) {
