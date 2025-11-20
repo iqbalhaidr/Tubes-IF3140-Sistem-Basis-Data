@@ -1,11 +1,12 @@
 #include "concurrency_control.h"
+
 #include <algorithm>
 #include <functional>
 #include <iostream>
 #include <sstream>
 
 namespace mdbms::ccm {
-    
+
 size_t CCManager::generate_row_hash(const Row& row) {
     // Generate hash berdasarkan nama tabel dan row_id
     std::hash<std::string> string_hasher;
@@ -53,6 +54,7 @@ std::mutex ConcurrencyControlManager::instance_mutex_;
 ConcurrencyControlManager& ConcurrencyControlManager::get_instance(const std::string& algorithm) {
     std::lock_guard<std::mutex> lock(instance_mutex_);
 
+    std::string algo = algorithm.empty() ? "timestamp" : algorithm;
     if (instance_ == nullptr) {
         instance_.reset(new ConcurrencyControlManager(algorithm));
         std::cout << "CCM: Instance Singleton dibuat" << std::endl;
@@ -63,6 +65,7 @@ ConcurrencyControlManager& ConcurrencyControlManager::get_instance(const std::st
 
 ConcurrencyControlManager::ConcurrencyControlManager(const std::string& algorithm)
     : current_algorithm_(algorithm) {
+    std::string algo = algorithm.empty() ? "timestamp" : algorithm;
     switch_algorithm(algorithm);
 }
 
@@ -78,8 +81,7 @@ void ConcurrencyControlManager::switch_algorithm(const std::string& algorithm) {
         // TODO: Implementasi Timestamp
         cc_manager_ = std::make_unique<TimestampCCManager>();
         current_algorithm_ = "timestamp";
-    }
-    else if (algo_lower == "twophaselocking" || algo_lower == "2pl") {
+    } else if (algo_lower == "twophaselocking" || algo_lower == "2pl") {
         cc_manager_ = std::make_unique<TwoPhaseLockingCCManager>();
         current_algorithm_ = "twophaselocking";
     }
@@ -103,7 +105,8 @@ void ConcurrencyControlManager::log_object(const Row& object, int transaction_id
     cc_manager_->log_object(object, transaction_id);
 }
 
-Response ConcurrencyControlManager::validate_object(const Row& object, int transaction_id, Action action) {
+Response ConcurrencyControlManager::validate_object(const Row& object, int transaction_id,
+                                                    Action action) {
     return cc_manager_->validate_object(object, transaction_id, action);
 }
 
@@ -111,4 +114,4 @@ void ConcurrencyControlManager::end_transaction(int transaction_id) {
     cc_manager_->end_transaction(transaction_id);
 }
 
-} // namespace mdbms::ccm
+}  // namespace mdbms::ccm
