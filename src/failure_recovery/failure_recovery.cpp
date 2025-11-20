@@ -59,8 +59,7 @@ FailureRecoveryManager::FailureRecoveryManager() {
 
 FailureRecoveryManager::~FailureRecoveryManager() {
     std::cout << "FRM: Destruktor FailureRecoveryManager dipanggil (stub)..." << std::endl;
-    std::lock_guard<std::mutex> lock(this->mtx);
-    flush_buffer();
+    save_checkpoint();
     std::cout << "FRM: Checkpoint terakhir disimpan sebelum keluar (stub)..." << std::endl;
 }
 
@@ -69,6 +68,9 @@ void FailureRecoveryManager::write_log(const ExecutionResult& info) {
         std::cout << "FRM: Mengabaikan log karena query gagal (T" << info.transaction_id << ")" << std::endl;
         return;
     }
+
+    std::cout << "FRM: Menulis log untuk query: " << info.query << " (stub)..." << std::endl;
+    std::lock_guard<std::mutex> lock(this->mtx);
 
     // 1. Inisialisasi LogEntry dan tentukan tipe operasi
     LogEntry entry;
@@ -104,21 +106,26 @@ void FailureRecoveryManager::write_log(const ExecutionResult& info) {
             }
             entry.new_value = Row();
         }
+    } else if (entry.operation == Operation::BEGIN) {
+        this->active_transactions_cache.insert(entry.transaction_id);
+        // Debug
+        std::cout << "FRM: Transaksi " << entry.transaction_id << " dimulai." << std::endl;
+    } else if (entry.operation == Operation::COMMIT || entry.operation == Operation::ABORT) {
+        this->active_transactions_cache.erase(entry.transaction_id);
+        // Debug
+        std::cout << "FRM: Transaksi " << entry.transaction_id << " selesai." << std::endl;
     } else {
-        // Untuk BEGIN, COMMIT, ABORT, dan SELECT (Commit non-data): kosongkan field data
+        // SELECT (Commit non-data): kosongkan field data
         entry.table_name.clear();
         entry.old_value = Row();
         entry.new_value = Row();
     }
 
+    this->log_buffer.push_back(entry);
 
-    // 3. Masukkan ke log_buffer (menggunakan Mutex dan ID)
-    {
-        // Kunci mutex untuk akses thread-safe
-        std::lock_guard<std::mutex> lock(this->mtx);
-        
-        entry.log_id = this->next_log_id++;
-        this->log_buffer.push_back(entry);
+    if (this->log_buffer.size() >= this->MAX_BUFFER_SIZE) {
+        std::cout << "FRM: Log buffer mencapai kapasitas maksimum. Melakukan flush..." << std::endl;
+        flush_buffer();
     }
 
     // Output Debugging
@@ -138,6 +145,39 @@ void FailureRecoveryManager::save_checkpoint() {
     std::cout << "FRM: Menyimpan checkpoint (stub)..." << std::endl;
     std::lock_guard<std::mutex> lock(this->mtx);
     flush_buffer();
+
+    // Menambahkan entri log untuk checkpoint
+    LogEntry checkpoint_entry;
+    checkpoint_entry.log_id = this->next_log_id++;
+    checkpoint_entry.transaction_id = -1;
+    checkpoint_entry.timestamp = std::time(nullptr);
+    checkpoint_entry.operation = Operation::CHECKPOINT;
+    checkpoint_entry.table_name = "SYSTEM";
+
+    std::string active_transactions_str = "[";
+    bool first = true;
+    for (int tid : this->active_transactions_cache) {
+        if (!first) active_transactions_str += ",";
+        active_transactions_str += std::to_string(tid);
+        first = false;
+    }
+    active_transactions_str += "]";
+    checkpoint_entry.query = "CHECKPOINT_L:" + active_transactions_str;
+
+    this->log_buffer.push_back(checkpoint_entry);
+    flush_buffer();
+
+    // Menyimpan informasi checkpoint
+    CheckpointInfo checkpoint;
+    checkpoint.checkpoint_id = this->next_checkpoint_id++;
+    checkpoint.timestamp = std::time(nullptr);
+
+    for (int tid : this->active_transactions_cache) {
+        checkpoint.active_transactions.push_back(tid);
+    }
+
+    this->checkpoints.push_back(checkpoint);
+    std::cout << "FRM: Checkpoint " << checkpoint.checkpoint_id << " disimpan dengan " << checkpoint.active_transactions.size() << " transaksi aktif." << std::endl;
 }
 
 void FailureRecoveryManager::recover(const RecoverCriteria&) {
@@ -238,6 +278,7 @@ std::string FailureRecoveryManager::operation_to_string(Operation op) {
         case Operation::UPDATE: return "UPDATE";
         case Operation::INSERT: return "INSERT";
         case Operation::DELETE: return "DELETE";
+        case Operation::CHECKPOINT: return "CHECKPOINT";
         default: return "UNKNOWN";
     }
 }
@@ -249,6 +290,7 @@ Operation FailureRecoveryManager::string_to_operation(const std::string& str) {
     if (str == "UPDATE") return Operation::UPDATE;
     if (str == "INSERT") return Operation::INSERT;
     if (str == "DELETE") return Operation::DELETE;
+    if (str == "CHECKPOINT") return Operation::CHECKPOINT;
     return Operation::ABORT; // Default safe fallback
 }
 
@@ -347,8 +389,8 @@ std::vector<LogEntry> FailureRecoveryManager::read_all_logs(const std::string& f
 
 void FailureRecoveryManager::flush_buffer() {
     if (this->log_buffer.empty()) {
-            return;
-        }
+        return;
+    }
 
     std::ofstream log_file(this->log_file_path, std::ios::app);
 
@@ -357,21 +399,13 @@ void FailureRecoveryManager::flush_buffer() {
         return;
     }
 
-    int count = 0;
     for (const auto& entry : this->log_buffer) {
-        // TODO: Ganti dengan serialize_log(entry)
-        // Format Sementara: ID,TransactionID,Table
-        // log_file << entry.log_id << "," 
-        //             << entry.transaction_id << "," 
-        //             << entry.table_name << "," 
-        //             << "PENDING_SERIALIZER" << "\n";
         log_file << serialize_log(entry) << "\n";
-        count++;
     }
 
     log_file.close();
     this->log_buffer.clear();
-    std::cout << "FRM: Flush log buffer ke file " << this->log_file_path << " (stub)..." << std::endl;
+    std::cout << "FRM: Flush log buffer ke file " << this->log_file_path << "." << std::endl;
 }
 
 } // namespace mdbms::fr

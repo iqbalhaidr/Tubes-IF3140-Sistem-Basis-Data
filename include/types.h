@@ -153,7 +153,8 @@ enum class Operation {
     ABORT,
     UPDATE,
     INSERT,
-    DELETE
+    DELETE,
+    CHECKPOINT
 };
 
 struct RecoverCriteria {

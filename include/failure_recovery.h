@@ -4,6 +4,7 @@
 #include <string>
 #include <sstream>
 #include <mutex>
+#include <set>
 #include "types.h"
 
 namespace mdbms::fr {
@@ -20,7 +21,9 @@ public:
 
 private:
     FailureRecoveryManager();
+    const size_t MAX_BUFFER_SIZE = 50;
     std::vector<LogEntry> log_buffer;
+    std::set<int> active_transactions_cache;
     std::vector<CheckpointInfo> checkpoints;
     std::string log_file_path;
     std::mutex mtx;
