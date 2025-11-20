@@ -33,7 +33,10 @@ QueryProcessor::QueryProcessor(std::shared_ptr<mdbms::qo::OptimizationEngine> op
     if (recovery) {
         frm_manager = std::move(recovery);
     } else {
-        frm_manager = std::make_shared<mdbms::fr::FailureRecoveryManager>();
+        frm_manager = std::shared_ptr<mdbms::fr::FailureRecoveryManager>(
+            &mdbms::fr::FailureRecoveryManager::get_instance(),
+            [](mdbms::fr::FailureRecoveryManager*) {}
+        );
     }
 
     std::cout << "QP: Query Processor initialized" << std::endl;

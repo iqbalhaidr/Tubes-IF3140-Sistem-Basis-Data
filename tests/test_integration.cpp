@@ -10,7 +10,7 @@
 int main() {
     auto optimizer = std::make_shared<mdbms::qo::OptimizationEngine>();
     auto storage = std::make_shared<mdbms::sm::StorageEngine>();
-    auto recovery = std::make_shared<mdbms::fr::FailureRecoveryManager>();
+    auto recovery = std::shared_ptr<mdbms::fr::FailureRecoveryManager>( &mdbms::fr::FailureRecoveryManager::get_instance(), [](mdbms::fr::FailureRecoveryManager*) {});
 
     mdbms::qp::QueryProcessor query_processor(optimizer, storage, nullptr, recovery);
 
