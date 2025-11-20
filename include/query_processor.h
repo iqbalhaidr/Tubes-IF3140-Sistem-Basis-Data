@@ -14,8 +14,7 @@ class QueryProcessor {
 public:
     explicit QueryProcessor(std::shared_ptr<mdbms::qo::OptimizationEngine> optimizer = nullptr,
                             std::shared_ptr<mdbms::sm::StorageEngine> storage = nullptr,
-                            std::shared_ptr<mdbms::ccm::ConcurrencyControlManager> concurrency = nullptr,
-                            std::shared_ptr<mdbms::fr::FailureRecoveryManager> recovery = nullptr);
+                            std::shared_ptr<mdbms::ccm::ConcurrencyControlManager> concurrency = nullptr);
 
     /**
     * Todo:
@@ -55,7 +54,7 @@ private:
     std::shared_ptr<mdbms::qo::OptimizationEngine> qo_engine;
     std::shared_ptr<mdbms::sm::StorageEngine> sm_engine;
     std::shared_ptr<mdbms::ccm::ConcurrencyControlManager> ccm_manager;
-    std::shared_ptr<mdbms::fr::FailureRecoveryManager> frm_manager;
+    mdbms::fr::FailureRecoveryManager* frm_manager;  // Singleton - non-owning pointer
 
     int current_transaction_id;
 

@@ -55,6 +55,10 @@ private:
     void append_log_to_file(const std::string& serialized_log, const std::string& file_path);
     std::vector<LogEntry> read_all_logs(const std::string& file_path);
     
+    // Helper untuk melakukan UNDO operasi berdasarkan log entry
+    // Baru undo karena untuk milestone 2 fokus ke transaction abort recovery. Redo diperlukan buat system failure nanti
+    bool undo_operation(const LogEntry& entry);
+    
     void flush_buffer();
 };
 

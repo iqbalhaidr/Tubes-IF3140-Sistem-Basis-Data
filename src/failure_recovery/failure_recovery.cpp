@@ -53,8 +53,10 @@ FailureRecoveryManager& FailureRecoveryManager::get_instance() {
 FailureRecoveryManager::FailureRecoveryManager() {
     this->next_log_id = 1;
     this->next_checkpoint_id = 1;
-    this->log_file_path = "data/wal.log";
-    std::cout << "FRM: Konstruktor FailureRecoveryManager dipanggil (stub)..." << std::endl;
+    // path untuk menyimpan log file
+    this->log_file_path = "../data/wal.log";
+    std::cout << "FRM: Konstruktor FailureRecoveryManager dipanggil..." << std::endl;
+    std::cout << "FRM: Log file path: " << this->log_file_path << std::endl;
 }
 
 FailureRecoveryManager::~FailureRecoveryManager() {
@@ -74,6 +76,7 @@ void FailureRecoveryManager::write_log(const ExecutionResult& info) {
 
     // 1. Inisialisasi LogEntry dan tentukan tipe operasi
     LogEntry entry;
+    entry.log_id = this->next_log_id++;
     entry.transaction_id = info.transaction_id;
     entry.timestamp = info.timestamp;
     entry.query = info.query;
@@ -180,8 +183,69 @@ void FailureRecoveryManager::save_checkpoint() {
     std::cout << "FRM: Checkpoint " << checkpoint.checkpoint_id << " disimpan dengan " << checkpoint.active_transactions.size() << " transaksi aktif." << std::endl;
 }
 
-void FailureRecoveryManager::recover(const RecoverCriteria&) {
-    std::cout << "FRM: Melakukan recovery (stub)..." << std::endl;
+void FailureRecoveryManager::recover(const RecoverCriteria& criteria) {
+    std::lock_guard<std::mutex> lock(this->mtx);
+    
+    std::cout << "FRM: Memulai proses recovery..." << std::endl;
+    
+    // Flush buffer untuk memastikan semua log ada di disk
+    flush_buffer();
+    
+    // Baca semua log dari file
+    std::vector<LogEntry> all_logs = read_all_logs(this->log_file_path);
+    
+    if (all_logs.empty()) {
+        std::cout << "FRM: Tidak ada log untuk di-recover." << std::endl;
+        return;
+    }
+    
+    // Filter log berdasarkan transaction_id untuk transaction abort recovery
+    std::vector<LogEntry> logs_to_recover;
+    
+    std::cout << "FRM: Recovery untuk transaction ID: " << criteria.transaction_id << std::endl;
+    for (const auto& entry : all_logs) {
+        if (entry.transaction_id == criteria.transaction_id) {
+            logs_to_recover.push_back(entry);
+        }
+    }
+    
+    if (logs_to_recover.empty()) {
+        std::cout << "FRM: Tidak ada log yang sesuai dengan kriteria recovery." << std::endl;
+        return;
+    }
+    
+    std::cout << "FRM: Ditemukan " << logs_to_recover.size() << " log entry untuk di-recover." << std::endl;
+    
+    // Proses recovery secara backward (dari entri terakhir ke awal)
+    int undo_count = 0;
+    for (auto it = logs_to_recover.rbegin(); it != logs_to_recover.rend(); ++it) {
+        const LogEntry& entry = *it;
+        
+        // Skip operasi BEGIN, COMMIT, dan ABORT karena gaada efek ke data
+        if (entry.operation == Operation::BEGIN || 
+            entry.operation == Operation::COMMIT || 
+            entry.operation == Operation::ABORT) {
+            std::cout << "FRM: Melewati operasi " << operation_to_string(entry.operation) 
+                      << " (log_id: " << entry.log_id << ")" << std::endl;
+            continue;
+        }
+        
+        // Lakukan UNDO untuk setiap operasi
+        std::cout << "FRM: UNDO operasi " << operation_to_string(entry.operation) 
+                  << " pada tabel " << entry.table_name 
+                  << " (log_id: " << entry.log_id << ")" << std::endl;
+        
+        bool undo_success = undo_operation(entry);
+        
+        if (undo_success) {
+            undo_count++;
+            std::cout << "FRM: Berhasil UNDO log_id " << entry.log_id << std::endl;
+        } else {
+            std::cerr << "FRM Error: Gagal UNDO log_id " << entry.log_id << std::endl;
+        }
+    }
+    
+    std::cout << "FRM: Recovery selesai. Total operasi yang di-UNDO: " << undo_count << std::endl;
 }
 
 std::string FailureRecoveryManager::any_to_string(const std::any& value) {
@@ -385,6 +449,49 @@ std::vector<LogEntry> FailureRecoveryManager::read_all_logs(const std::string& f
     infile.close();
     std::cout << "FRM: Berhasil memuat " << logs.size() << " entri log dari disk." << std::endl;
     return logs;
+}
+
+bool FailureRecoveryManager::undo_operation(const LogEntry& entry) {
+    // Untuk saat ini, belum diintegrate dengan query processor dan storage manager
+    // Jadi undo hanya disimulate dengan melakukan logging doang (bukan beneran undo karena perlu integrate dengan storage manager )
+    std::cout << "FRM: Melakukan UNDO untuk operasi " << operation_to_string(entry.operation) << std::endl;
+    
+    switch (entry.operation) {
+        case Operation::INSERT: {
+            // UNDO INSERT -> DELETE row yang baru diinsert (menggunakan new_value)
+            std::cout << "FRM: UNDO INSERT - Menghapus row dengan ID " << entry.new_value.row_id 
+                      << " dari tabel " << entry.table_name << std::endl;
+            
+            // TODO: Seharusnya panggil storage manager untuk menghapus row
+            
+            return true;
+        }
+        
+        case Operation::DELETE: {
+            // UNDO DELETE -> INSERT kembali row yang dihapus (menggunakan old_value)
+            std::cout << "FRM: UNDO DELETE - Mengembalikan row dengan ID " << entry.old_value.row_id 
+                      << " ke tabel " << entry.table_name << std::endl;
+            
+            // TODO: Seharusnya panggil storage manager untuk insert row
+
+            return true;
+        }
+        
+        case Operation::UPDATE: {
+            // UNDO UPDATE -> UPDATE kembali ke nilai lama (old_value)
+            std::cout << "FRM: UNDO UPDATE - Mengembalikan row dengan ID " << entry.old_value.row_id 
+                      << " ke nilai lama pada tabel " << entry.table_name << std::endl;
+            
+            // TODO: Seharusnya panggil storage manager untuk update row
+
+            return true;
+        }
+        
+        default:
+            std::cerr << "FRM Error: Operasi " << operation_to_string(entry.operation) 
+                      << " tidak dapat di-UNDO" << std::endl;
+            return false;
+    }
 }
 
 void FailureRecoveryManager::flush_buffer() {

@@ -10,9 +10,8 @@
 int main() {
     auto optimizer = std::make_shared<mdbms::qo::OptimizationEngine>();
     auto storage = std::make_shared<mdbms::sm::StorageEngine>();
-    auto recovery = std::shared_ptr<mdbms::fr::FailureRecoveryManager>( &mdbms::fr::FailureRecoveryManager::get_instance(), [](mdbms::fr::FailureRecoveryManager*) {});
 
-    mdbms::qp::QueryProcessor query_processor(optimizer, storage, nullptr, recovery);
+    mdbms::qp::QueryProcessor query_processor(optimizer, storage, nullptr);
 
     const std::string query = "SELECT name FROM integration_stub";
     std::ostringstream captured_output;

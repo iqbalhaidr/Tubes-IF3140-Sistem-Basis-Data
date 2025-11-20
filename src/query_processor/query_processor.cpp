@@ -12,8 +12,7 @@ namespace mdbms::qp {
 
 QueryProcessor::QueryProcessor(std::shared_ptr<mdbms::qo::OptimizationEngine> optimizer,
                                std::shared_ptr<mdbms::sm::StorageEngine> storage,
-                               std::shared_ptr<mdbms::ccm::ConcurrencyControlManager> concurrency,
-                               std::shared_ptr<mdbms::fr::FailureRecoveryManager> recovery)
+                               std::shared_ptr<mdbms::ccm::ConcurrencyControlManager> concurrency)
     : current_transaction_id(-1) {
     if (optimizer) {
         qo_engine = std::move(optimizer);
@@ -30,14 +29,8 @@ QueryProcessor::QueryProcessor(std::shared_ptr<mdbms::qo::OptimizationEngine> op
     } else {
         ccm_manager = std::make_shared<mdbms::ccm::ConcurrencyControlManager>();
     }
-    if (recovery) {
-        frm_manager = std::move(recovery);
-    } else {
-        frm_manager = std::shared_ptr<mdbms::fr::FailureRecoveryManager>(
-            &mdbms::fr::FailureRecoveryManager::get_instance(),
-            [](mdbms::fr::FailureRecoveryManager*) {}
-        );
-    }
+    
+    frm_manager = &mdbms::fr::FailureRecoveryManager::get_instance();
 
     std::cout << "QP: Query Processor initialized" << std::endl;
 }
