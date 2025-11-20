@@ -1,6 +1,10 @@
 #include <any>
+#include <atomic>
+#include <cassert>
+#include <chrono>
 #include <iostream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "types.h"
@@ -15,7 +19,6 @@ Row create_row(int id, std::string val_content) {
     r.row_id = id;
     r.table_name = "TestTable";
     r.columns["data_col"] = val_content;
-
     return r;
 }
 
@@ -24,10 +27,221 @@ void print_response(const std::string& prefix, const Response& resp) {
               << ", TID: " << resp.transaction_id << std::endl;
 }
 
+/* TES TIMESTAMP */
+void print_result(const std::string& msg, bool ok) {
+    const std::string GREEN = "\033[32m";
+    const std::string RED = "\033[31m";
+    const std::string RESET = "\033[0m";
+
+    if (ok)
+        std::cout << GREEN << "[PASS] " << msg << RESET << std::endl;
+    else
+        std::cerr << RED << "[FAIL] " << msg << RESET << std::endl;
+}
+
+void test_singleton() {
+    std::cout << "\n--- TEST 1: Singleton Pattern ---" << std::endl;
+
+    auto& c1 = ConcurrencyControlManager::get_instance();
+    auto& c2 = ConcurrencyControlManager::get_instance();
+
+    bool ok = (&c1 == &c2);
+    print_result("Singleton instance konsisten", ok);
+    std::cout << "\n--- TEST 1.1: Singleton Switch Algorithm ---" << std::endl;
+
+    c1.switch_algorithm("twophaselocking");
+    bool ok2 = (&c1 == &c2);
+    print_result("Singleton Switch konsisten", ok2);
+
+    c1.switch_algorithm("timestamp");
+}
+
+void test_singleton_thread_safety() {
+    std::cout << "\n--- TEST 2: Thread Safety Singleton ---" << std::endl;
+
+    const int N = 10;
+    std::vector<std::thread> threads;
+    std::vector<ConcurrencyControlManager*> refs(N);
+
+    for (int i = 0; i < N; i++) {
+        threads.emplace_back(
+            [&](int idx) { refs[idx] = &ConcurrencyControlManager::get_instance(); }, i);
+    }
+    for (auto& t : threads)
+        t.join();
+
+    bool ok = true;
+    for (int i = 1; i < N; i++)
+        if (refs[i] != refs[0])
+            ok = false;
+
+    print_result("Semua thread mendapat instance yang sama", ok);
+}
+
+void test_basic_transaction_lifecycle() {
+    std::cout << "\n--- TEST 3: Basic Transaction Lifecycle ---" << std::endl;
+    auto& ccm = ConcurrencyControlManager::get_instance("timestamp");
+
+    int tid = ccm.begin_transaction();
+    bool ok = (tid > 0);
+    if (!ok)
+        print_result("Transaction ID tidak valid", false);
+
+    Row row = create_row(1, "test_table");
+
+    try {
+        ccm.log_object(row, tid);
+
+        Response r = ccm.validate_object(row, tid, Action::READ);
+        Response w = ccm.validate_object(row, tid, Action::WRITE);
+
+        ok = r.allowed && w.allowed;
+        ccm.end_transaction(tid);
+
+        print_result("Transaction lifecycle berhasil", ok);
+    } catch (const std::exception& e) {
+        std::cerr << "[FAIL] Exception: " << e.what() << std::endl;
+    }
+}
+
+void test_timestamp_read_after_write() {
+    std::cout << "\n--- TEST 4: Read After Write Conflict ---" << std::endl;
+
+    auto& ccm = ConcurrencyControlManager::get_instance();
+
+    Row r = create_row(100, "conflict_table");
+
+    int t1 = ccm.begin_transaction();
+    ccm.log_object(r, t1);
+    assert(ccm.validate_object(r, t1, Action::WRITE).allowed);
+    ccm.end_transaction(t1);
+
+    int t2 = ccm.begin_transaction();
+    ccm.log_object(r, t2);
+
+    int t3 = ccm.begin_transaction();
+    ccm.log_object(r, t3);
+    assert(ccm.validate_object(r, t3, Action::WRITE).allowed);
+    ccm.end_transaction(t3);
+
+    Response rr = ccm.validate_object(r, t2, Action::READ);
+
+    ccm.end_transaction(t2);
+    print_result("Timestamp read conflict terdeteksi", !rr.allowed);
+}
+
+void test_timestamp_write_after_read() {
+    std::cout << "\n--- TEST 5: Write After Read Conflict ---" << std::endl;
+
+    auto& ccm = ConcurrencyControlManager::get_instance();
+
+    Row r = create_row(200, "conflict_table");
+
+    int ta = ccm.begin_transaction();
+    ccm.log_object(r, ta);
+    assert(ccm.validate_object(r, ta, Action::READ).allowed);
+
+    int tb = ccm.begin_transaction();
+    ccm.end_transaction(ta);
+
+    int tc = ccm.begin_transaction();
+    ccm.log_object(r, tc);
+    assert(ccm.validate_object(r, tc, Action::READ).allowed);
+    ccm.end_transaction(tc);
+
+    ccm.log_object(r, tb);
+    Response wr = ccm.validate_object(r, tb, Action::WRITE);
+
+    print_result("Timestamp write conflict terdeteksi", !wr.allowed);
+
+    ccm.end_transaction(tb);
+}
+
+void test_concurrent_transactions() {
+    std::cout << "\n--- TEST 6: Concurrent Transactions ---" << std::endl;
+
+    auto& ccm = ConcurrencyControlManager::get_instance();
+
+    const int N = 5;
+    const int OPS = 10;
+
+    std::atomic<int> ok{0}, fail{0};
+    std::vector<std::thread> th;
+
+    for (int c = 0; c < N; c++) {
+        th.emplace_back([&]() {
+            for (int i = 0; i < OPS; i++) {
+                int tid = ccm.begin_transaction();
+
+                Row r = create_row(c, "shared_table");
+                ccm.log_object(r, tid);
+
+                Response rr = ccm.validate_object(r, tid, Action::READ);
+                if (rr.allowed) {
+                    Response wr = ccm.validate_object(r, tid, Action::WRITE);
+                    wr.allowed ? ok++ : fail++;
+                } else
+                    fail++;
+
+                ccm.end_transaction(tid);
+                std::this_thread::sleep_for(std::chrono::microseconds(50));
+            }
+        });
+    }
+
+    for (auto& t : th)
+        t.join();
+
+    bool total_ok = ((ok + fail) == N * OPS);
+    print_result("Concurrent transactions berhasil", total_ok && ok > 0);
+}
+
+void test_invalid_transaction_id() {
+    std::cout << "\n--- TEST 7: Invalid Transaction ID ---" << std::endl;
+
+    auto& ccm = ConcurrencyControlManager::get_instance();
+
+    Row r = create_row(999, "test_table");
+
+    bool caught = false;
+    try {
+        ccm.log_object(r, 999999);
+    } catch (...) {
+        caught = true;
+    }
+
+    print_result("Invalid transaction ID terdeteksi", caught);
+}
+
+void test_switch_algorithm() {
+    std::cout << "\n--- TEST 8: Switch Algorithm ---" << std::endl;
+
+    auto& ccm = ConcurrencyControlManager::get_instance();
+
+    bool ok1 = true;
+    try {
+        ccm.switch_algorithm("timestamp");
+    } catch (...) {
+        ok1 = false;
+    }
+    print_result("Switch ke timestamp berhasil", ok1);
+
+    bool ok2 = false;
+    try {
+        ccm.switch_algorithm("unsupported_algorithm");
+    } catch (const std::invalid_argument&) {
+        ok2 = true;
+    }
+    print_result("Unsupported algorithm terdeteksi", ok2);
+}
+
+/* TWO PHASE LOCKING*/
+
 void test_twoPL_cc() {
     std::cout << "\nTesting Two-Phase Locking Concurrency Control\n" << std::endl;
-    
-    auto& ccm = ConcurrencyControlManager::get_instance("twophaselocking");
+
+    std::cout << "\n--- TEST 9: 2PL Concurruncy General ---" << std::endl;
+    auto& ccm = ConcurrencyControlManager::get_instance();
     ccm.switch_algorithm("twophaselocking");
 
     Row row1 = create_row(1, "Group1");
@@ -37,31 +251,36 @@ void test_twoPL_cc() {
     ccm.log_object(row1, tid1);
     Response response1 = ccm.validate_object(row1, tid1, Action::READ);
     print_response("Transaction " + std::to_string(tid1) + " READ on Row1: ", response1);
+    print_result("T1 READ Row1", response1.allowed == true);
 
     int tid2 = ccm.begin_transaction();
     Response response2 = ccm.validate_object(row1, tid2, Action::READ);
     print_response("Transaction " + std::to_string(tid2) + " READ on Row1: ", response2);
+    print_result("T2 READ Row1", response2.allowed == true);
 
     // tc: exclusive lock conflict
     // harusnya fail karena tid1 dan tid2 punya slock
     Response response3 = ccm.validate_object(row1, tid2, Action::WRITE);
     print_response("Transaction " + std::to_string(tid2) + " WRITE on Row1: ", response3);
+    print_result("T2 WRITE Row1 (expect reject)", response3.allowed == false);
 
     // tc: independent operations on different rows
     ccm.log_object(row2, tid2);
     Response response4 = ccm.validate_object(row2, tid2, Action::WRITE);
     print_response("Transaction " + std::to_string(tid2) + " WRITE on Row2: ", response4);
+    print_result("T2 WRITE Row2 (expect fail after abort)", response4.allowed == false);
 
     // tc: lock upgrade attempt (atau read di row lain)
     int tid3 = ccm.begin_transaction();
     Response response5 = ccm.validate_object(row2, tid3, Action::READ);
     print_response("Transaction " + std::to_string(tid3) + " READ on Row2: ", response5);
-
+    print_result("T3 READ Row2", response5.allowed == true);
     ccm.end_transaction(tid1);
 
     // tid3 mencoba write row1 (setelah tid1 lepas lock)
     Response response6 = ccm.validate_object(row1, tid3, Action::WRITE);
     print_response("Transaction " + std::to_string(tid3) + " WRITE on Row1: ", response6);
+    print_result("T3 WRITE Row1 after T1 ends", response6.allowed == true);
 
     ccm.end_transaction(tid2);
     ccm.end_transaction(tid3);
@@ -69,8 +288,8 @@ void test_twoPL_cc() {
 
 void test_twoPL_abort() {
     std::cout << "\nTesting Two-Phase Locking Abort Scenarios\n" << std::endl;
-    
-    auto& ccm = ConcurrencyControlManager::get_instance("twophaselocking");
+    std::cout << "\n--- TEST 10: Abort Scenarios ---" << std::endl;
+    auto& ccm = ConcurrencyControlManager::get_instance();
     ccm.switch_algorithm("twophaselocking");
 
     Row row1 = create_row(10, "AliceBob");
@@ -81,20 +300,22 @@ void test_twoPL_abort() {
     ccm.log_object(row1, tid1);
     Response response1 = ccm.validate_object(row1, tid1, Action::READ);
     print_response("Transaction " + std::to_string(tid1) + " READ on Row1: ", response1);
+    print_result("T1 READ Row1 (expect allowed)", response1.allowed == true);
 
     int tid2 = ccm.begin_transaction();
 
     ccm.log_object(row2, tid2);
     Response response2 = ccm.validate_object(row2, tid2, Action::WRITE);
     print_response("Transaction " + std::to_string(tid2) + " WRITE on Row2: ", response2);
+    print_result("T2 WRITE Row2 (expect allowed)", response2.allowed == true);
 
     // tid1 commit -> masuk fase SHRINKING
     ccm.end_transaction(tid1);
 
     // coba ambil lock baru setelah commit (seharusnya gagal/abort)
     Response response3 = ccm.validate_object(row2, tid1, Action::READ);
-    print_response("Transaction " + std::to_string(tid1) + " READ on Row2: ",
-                   response3);
+    print_response("Transaction " + std::to_string(tid1) + " READ on Row2: ", response3);
+    print_result("T1 READ Row2 after commit (expect fail)", response3.allowed == false);
 
     ccm.end_transaction(tid2);
 }
@@ -102,8 +323,8 @@ void test_twoPL_abort() {
 // karena sekarang kalau transaksi nunggu langsung diabort, belum mungkin terjadi deadlock
 void test_twoPL_deadlock() {
     std::cout << "\nTesting Two-Phase Locking Deadlock Scenario\n" << std::endl;
-    
-    auto& ccm = ConcurrencyControlManager::get_instance("twophaselocking");
+    std::cout << "\n--- TEST 11: Deadlock Scenarios ---" << std::endl;
+    auto& ccm = ConcurrencyControlManager::get_instance();
     ccm.switch_algorithm("twophaselocking");
 
     Row row1 = create_row(20, "AliceOnly");
@@ -113,23 +334,28 @@ void test_twoPL_deadlock() {
     ccm.log_object(row1, tid1);
     Response response1 = ccm.validate_object(row1, tid1, Action::READ);
     print_response("Transaction " + std::to_string(tid1) + " READ on Row1: ", response1);
+    print_result("T1 READ Row1 (expect allowed)", response1.allowed == true);
 
     int tid2 = ccm.begin_transaction();
     ccm.log_object(row2, tid2);
     Response response2 = ccm.validate_object(row2, tid2, Action::READ);
     print_response("Transaction " + std::to_string(tid2) + " READ on Row2: ", response2);
+    print_result("T2 READ Row2 (expect allowed)", response2.allowed == true);
 
     // T1 write R2 (punya T2) -> sekarang abort, nanti nunggu
     Response response3 = ccm.validate_object(row2, tid1, Action::WRITE);
     print_response("Transaction " + std::to_string(tid1) + " WRITE on Row2: ", response3);
+    print_result("T1 WRITE Row2 (expect fail due to conflict)", response3.allowed == false);
 
     // T2 write R1 (punya T1) -> sekarang bisa langsung aja, nanti jadi deadlock
     Response response4 = ccm.validate_object(row1, tid2, Action::WRITE);
     print_response("Transaction " + std::to_string(tid2) + " WRITE on Row1: ", response4);
+    print_result("T2 WRITE Row1 (expect allowed)", response4.allowed == true);
 
     // sekarang T1 udah abort, nanti dicek apakah T1 masih bisa lanjut
     Response response5 = ccm.validate_object(row1, tid1, Action::WRITE);
     print_response("Transaction " + std::to_string(tid1) + " WRITE on Row1: ", response5);
+    print_result("T1 WRITE Row1 after abort (expect fail)", response5.allowed == false);
 
     ccm.end_transaction(tid1);
     ccm.end_transaction(tid2);
@@ -137,8 +363,9 @@ void test_twoPL_deadlock() {
 
 void test_twoPL_deadlock_abort() {
     std::cout << "\nTesting Two-Phase Locking Deadlock with Abort Resolution\n" << std::endl;
-    
-    auto& ccm = ConcurrencyControlManager::get_instance("twophaselocking");
+    std::cout << "\n--- TEST 12: 2PL Deadlock with Abort Resolution ---\n";
+
+    auto& ccm = ConcurrencyControlManager::get_instance();
     ccm.switch_algorithm("twophaselocking");
 
     Row row1 = create_row(30, "Alice");
@@ -148,28 +375,43 @@ void test_twoPL_deadlock_abort() {
     ccm.log_object(row1, tid1);
     Response response1 = ccm.validate_object(row1, tid1, Action::WRITE);
     print_response("Transaction " + std::to_string(tid1) + " WRITE on Row1: ", response1);
+    print_result("T1 WRITE Row1 (expect allowed)", response1.allowed == true);
 
     int tid2 = ccm.begin_transaction();
     ccm.log_object(row2, tid2);
     Response response2 = ccm.validate_object(row2, tid2, Action::WRITE);
     print_response("Transaction " + std::to_string(tid2) + " WRITE on Row2: ", response2);
+    print_result("T2 WRITE Row2 (expect allowed)", response2.allowed == true);
 
     // T1 write R2 (punya T2) -> sekarang abort, nanti nunggu
     ccm.log_object(row2, tid1);
     Response response3 = ccm.validate_object(row2, tid1, Action::WRITE);
     print_response("Transaction " + std::to_string(tid1) + " WRITE on Row2: ", response3);
+    print_result("T1 WRITE Row2 after conflict (expect fail)", response3.allowed == false);
 
     // T2 write R1 (punya T1) -> sekarang bisa langsung aja, nanti jadi deadlock
     ccm.log_object(row1, tid2);
     Response response4 = ccm.validate_object(row1, tid2, Action::WRITE);
     print_response("Transaction " + std::to_string(tid2) + " WRITE on Row1: ", response4);
+    print_result("T2 WRITE Row1 (expect allowed)", response4.allowed == true);
 
+    Response response5 = ccm.validate_object(row1, tid1, Action::WRITE);
+    print_response("T1 WRITE Row1 AFTER ABORT", response5);
+    print_result("T1 WRITE Row1 after abort (expect fail)", response5.allowed == false);
     ccm.end_transaction(tid1);
     ccm.end_transaction(tid2);
 }
 
 int main() {
     try {
+        test_singleton();
+        test_singleton_thread_safety();
+        test_basic_transaction_lifecycle();
+        test_timestamp_read_after_write();
+        test_timestamp_write_after_read();
+        test_concurrent_transactions();
+        test_invalid_transaction_id();
+        test_switch_algorithm();
         test_twoPL_cc();
         test_twoPL_abort();
         test_twoPL_deadlock();
@@ -179,282 +421,4 @@ int main() {
     }
 
     return 0;
-}
-
-/*
-buat sekarang pemanggilan ccm masih
-
-auto& ccm = ConcurrencyControlManager::get_instance("twophaselocking");
-ccm.switch_algorithm("twophaselocking");
-
-karena get_instance butuh argumen string (keknya default timestamp ga jalan,,,),
--> kalau get_instance isinya kosong ga ke set default jadi timestamp huhu
-*/
-// TODO: Tambahkan unit test untuk Concurrency Control Manager
-#include <atomic>
-#include <cassert>
-#include <chrono>
-#include <iostream>
-#include <thread>
-#include <vector>
-
-#include "concurrency_control.h"
-
-using namespace mdbms;
-using namespace mdbms::ccm;
-
-int main() {
-    bool all_passed = true;
-
-    // TEST 1: Singleton Pattern
-    std::cout << "\n--- TEST 1: Singleton Pattern ---" << std::endl;
-    auto& ccm1 = ConcurrencyControlManager::get_instance("timestamp");
-    auto& ccm2 = ConcurrencyControlManager::get_instance();
-
-    if (&ccm1 != &ccm2) {
-        std::cerr << "[FAIL] Singleton instance tidak sama" << std::endl;
-        all_passed = false;
-    } else {
-        std::cout << "[PASS] Singleton instance konsisten" << std::endl;
-    }
-
-    // TEST 2: Thread Safety - Multiple threads mengakses singleton
-    std::cout << "\n--- TEST 2: Thread Safety Singleton ---" << std::endl;
-    const int NUM_THREADS = 10;
-    std::vector<std::thread> threads;
-    std::vector<ConcurrencyControlManager*> instances(NUM_THREADS);
-
-    for (int i = 0; i < NUM_THREADS; i++) {
-        threads.emplace_back([&instances, i]() {
-            auto& ccm = ConcurrencyControlManager::get_instance();
-            instances[i] = &ccm;
-        });
-    }
-
-    for (auto& thread : threads) {
-        thread.join();
-    }
-
-    bool all_same = true;
-    for (int i = 1; i < NUM_THREADS; i++) {
-        if (instances[0] != instances[i]) {
-            all_same = false;
-            break;
-        }
-    }
-
-    if (!all_same) {
-        std::cerr << "[FAIL] Thread safety singleton gagal" << std::endl;
-        all_passed = false;
-    } else {
-        std::cout << "[PASS] Semua thread mendapat instance yang sama" << std::endl;
-    }
-
-    // TEST 3: Basic Transaction Lifecycle
-    std::cout << "\n--- TEST 3: Basic Transaction Lifecycle ---" << std::endl;
-    auto& ccm = ConcurrencyControlManager::get_instance("timestamp");
-
-    int txn_id = ccm.begin_transaction();
-    if (txn_id <= 0) {
-        std::cerr << "[FAIL] Transaction ID tidak valid" << std::endl;
-        all_passed = false;
-    }
-
-    Row row;
-    row.table_name = "test_table";
-    row.row_id = 1;
-
-    try {
-        ccm.log_object(row, txn_id);
-
-        Response read_response = ccm.validate_object(row, txn_id, Action::READ);
-        if (!read_response.allowed) {
-            std::cerr << "[FAIL] READ operation gagal" << std::endl;
-            all_passed = false;
-        }
-
-        Response write_response = ccm.validate_object(row, txn_id, Action::WRITE);
-        if (!write_response.allowed) {
-            std::cerr << "[FAIL] WRITE operation gagal" << std::endl;
-            all_passed = false;
-        }
-
-        ccm.end_transaction(txn_id);
-        std::cout << "[PASS] Transaction lifecycle berhasil" << std::endl;
-    } catch (const std::exception& e) {
-        std::cerr << "[FAIL] Exception: " << e.what() << std::endl;
-        all_passed = false;
-    }
-
-    // TEST 4: Timestamp Ordering - Read after Write conflict
-    std::cout << "\n--- TEST 4: Read After Write Conflict ---" << std::endl;
-    Row test_row;
-    test_row.table_name = "conflict_table";
-    test_row.row_id = 100;
-
-    int txn1 = ccm.begin_transaction();
-    ccm.log_object(test_row, txn1);
-    Response write1 = ccm.validate_object(test_row, txn1, Action::WRITE);
-    assert(write1.allowed);
-    ccm.end_transaction(txn1);
-
-    int txn2 = ccm.begin_transaction();
-    ccm.log_object(test_row, txn2);
-
-    int txn3 = ccm.begin_transaction();
-    ccm.log_object(test_row, txn3);
-    Response write3 = ccm.validate_object(test_row, txn3, Action::WRITE);
-    assert(write3.allowed);
-    ccm.end_transaction(txn3);
-
-    Response read2 = ccm.validate_object(test_row, txn2, Action::READ);
-    if (read2.allowed) {
-        std::cerr << "[FAIL] Read seharusnya gagal karena timestamp conflict" << std::endl;
-        all_passed = false;
-    } else {
-        std::cout << "[PASS] Timestamp ordering read conflict terdeteksi" << std::endl;
-    }
-    ccm.end_transaction(txn2);
-
-    // TEST 5: Timestamp Ordering - Write after Read conflict
-    std::cout << "\n--- TEST 5: Write After Read Conflict ---" << std::endl;
-    Row test_row2;
-    test_row2.table_name = "conflict_table";
-    test_row2.row_id = 200;
-
-    int txn_a = ccm.begin_transaction();
-    ccm.log_object(test_row2, txn_a);
-    Response read_a = ccm.validate_object(test_row2, txn_a, Action::READ);
-    assert(read_a.allowed);
-
-    int txn_b = ccm.begin_transaction();
-    ccm.end_transaction(txn_a);
-
-    int txn_c = ccm.begin_transaction();
-    ccm.log_object(test_row2, txn_c);
-    Response read_c = ccm.validate_object(test_row2, txn_c, Action::READ);
-    assert(read_c.allowed);
-    ccm.end_transaction(txn_c);
-
-    ccm.log_object(test_row2, txn_b);
-    Response write_b = ccm.validate_object(test_row2, txn_b, Action::WRITE);
-    if (write_b.allowed) {
-        std::cerr << "[FAIL] Write seharusnya gagal karena timestamp conflict" << std::endl;
-        all_passed = false;
-    } else {
-        std::cout << "[PASS] Timestamp ordering write conflict terdeteksi" << std::endl;
-    }
-    ccm.end_transaction(txn_b);
-
-    // TEST 6: Multiple Concurrent Transactions
-    std::cout << "\n--- TEST 6: Concurrent Transactions ---" << std::endl;
-    const int NUM_CLIENTS = 5;
-    const int OPS_PER_CLIENT = 10;
-    std::vector<std::thread> clients;
-    std::atomic<int> successful_txns{0};
-    std::atomic<int> failed_txns{0};
-
-    auto client_operations = [&](int client_id) {
-        for (int i = 0; i < OPS_PER_CLIENT; i++) {
-            int tid = ccm.begin_transaction();
-
-            Row client_row;
-            client_row.table_name = "shared_table";
-            client_row.row_id = client_id;
-
-            ccm.log_object(client_row, tid);
-            Response r_resp = ccm.validate_object(client_row, tid, Action::READ);
-
-            if (r_resp.allowed) {
-                Response w_resp = ccm.validate_object(client_row, tid, Action::WRITE);
-                if (w_resp.allowed) {
-                    successful_txns++;
-                } else {
-                    failed_txns++;
-                }
-            } else {
-                failed_txns++;
-            }
-
-            ccm.end_transaction(tid);
-            std::this_thread::sleep_for(std::chrono::microseconds(50));
-        }
-    };
-
-    for (int i = 0; i < NUM_CLIENTS; i++) {
-        clients.emplace_back(client_operations, i);
-    }
-
-    for (auto& client : clients) {
-        client.join();
-    }
-
-    int total_ops = successful_txns + failed_txns;
-    std::cout << "Total operasi: " << total_ops << std::endl;
-    std::cout << "Sukses: " << successful_txns << std::endl;
-    std::cout << "Gagal: " << failed_txns << std::endl;
-
-    if (total_ops != NUM_CLIENTS * OPS_PER_CLIENT) {
-        std::cerr << "[FAIL] Total operasi tidak sesuai" << std::endl;
-        all_passed = false;
-    } else if (successful_txns == 0) {
-        std::cerr << "[FAIL] Tidak ada transaksi yang sukses" << std::endl;
-        all_passed = false;
-    } else {
-        std::cout << "[PASS] Concurrent transactions berhasil" << std::endl;
-    }
-
-    // TEST 7: Invalid Transaction ID
-    std::cout << "\n--- TEST 7: Invalid Transaction ID ---" << std::endl;
-    Row invalid_row;
-    invalid_row.table_name = "test_table";
-    invalid_row.row_id = 999;
-
-    bool exception_caught = false;
-    try {
-        ccm.log_object(invalid_row, 999999);
-    } catch (const std::runtime_error&) {
-        exception_caught = true;
-    }
-
-    if (!exception_caught) {
-        std::cerr << "[FAIL] Exception untuk invalid transaction ID tidak tertangkap" << std::endl;
-        all_passed = false;
-    } else {
-        std::cout << "[PASS] Invalid transaction ID terdeteksi" << std::endl;
-    }
-
-    // TEST 8: Switch Algorithm
-    std::cout << "\n--- TEST 8: Switch Algorithm ---" << std::endl;
-    try {
-        ccm.switch_algorithm("timestamp");
-        std::cout << "[PASS] Switch ke timestamp berhasil" << std::endl;
-    } catch (...) {
-        std::cerr << "[FAIL] Switch ke timestamp gagal" << std::endl;
-        all_passed = false;
-    }
-
-    bool unsupported_caught = false;
-    try {
-        ccm.switch_algorithm("unsupported_algorithm");
-    } catch (const std::invalid_argument&) {
-        unsupported_caught = true;
-    }
-
-    if (!unsupported_caught) {
-        std::cerr << "[FAIL] Algoritma tidak didukung seharusnya throw exception" << std::endl;
-        all_passed = false;
-    } else {
-        std::cout << "[PASS] Unsupported algorithm terdeteksi" << std::endl;
-    }
-
-    // HASIL AKHIR
-    std::cout << "\n========================================" << std::endl;
-    if (all_passed) {
-        std::cout << "*** SEMUA TES CCM LOLOS! ***" << std::endl;
-        return 0;
-    } else {
-        std::cerr << "*** BEBERAPA TES CCM GAGAL ***" << std::endl;
-        return 1;
-    }
 }
