@@ -56,7 +56,8 @@ void TimestampCCManager::log_object(const Row& object, int transaction_id) {
 Response TimestampCCManager::validate_object(const Row& object, int transaction_id, Action action) {
     // Error handling: jika transaksi tidak ditemukan, log dan return Response gagal
     if (transactions_.find(transaction_id) == transactions_.end()) {
-        std::cerr << "[ERROR] Transaksi " << transaction_id << " tidak ditemukan pada validate_object" << std::endl;
+        std::cerr << "[ERROR] Transaksi " << transaction_id
+                  << " tidak ditemukan pada validate_object" << std::endl;
         return Response(false, transaction_id);
     }
 
@@ -94,13 +95,13 @@ Response TimestampCCManager::validate_object(const Row& object, int transaction_
             if (action == Action::READ) {
                 ts.read_ts = std::max(ts.read_ts, transaction->timestamp);
                 std::cout << "CCM: Transaksi " << transaction_id
-                    << " diizinkan READ pada objek (hash: " << row_hash << "), read_ts diupdate ke "
-                    << ts.read_ts << std::endl;
+                          << " diizinkan READ pada objek (hash: " << row_hash
+                          << "), read_ts diupdate ke " << ts.read_ts << std::endl;
             } else if (action == Action::WRITE) {
                 ts.write_ts = transaction->timestamp;
                 std::cout << "CCM: Transaksi " << transaction_id
-                    << " diizinkan WRITE pada objek (hash: " << row_hash << "), write_ts diupdate ke "
-                    << ts.write_ts << std::endl;
+                          << " diizinkan WRITE pada objek (hash: " << row_hash
+                          << "), write_ts diupdate ke " << ts.write_ts << std::endl;
             }
             return Response(true, transaction_id);
         } else {
@@ -108,13 +109,14 @@ Response TimestampCCManager::validate_object(const Row& object, int transaction_
             if (retry_count > max_retries) {
                 if (action == Action::READ) {
                     std::cout << "CCM: Transaksi " << transaction_id
-                        << " GAGAL karena konflik timestamp pada READ (TS=" << transaction->timestamp
-                        << " < write_ts=" << ts.write_ts << ")" << std::endl;
+                              << " GAGAL karena konflik timestamp pada READ (TS="
+                              << transaction->timestamp << " < write_ts=" << ts.write_ts << ")"
+                              << std::endl;
                 } else {
                     std::cout << "CCM: Transaksi " << transaction_id
-                        << " GAGAL karena konflik timestamp pada WRITE (TS=" << transaction->timestamp
-                        << ", read_ts=" << ts.read_ts << ", write_ts=" << ts.write_ts << ")"
-                        << std::endl;
+                              << " GAGAL karena konflik timestamp pada WRITE (TS="
+                              << transaction->timestamp << ", read_ts=" << ts.read_ts
+                              << ", write_ts=" << ts.write_ts << ")" << std::endl;
                 }
                 transaction->state = TransactionStatus::FAILED;
                 return Response(false, transaction_id);
@@ -127,11 +129,13 @@ Response TimestampCCManager::validate_object(const Row& object, int transaction_
     std::cerr << "[ERROR] validate_object fallback error" << std::endl;
     return Response(false, transaction_id);
 }
+
 void TimestampCCManager::end_transaction(int transaction_id) {
     std::lock_guard<std::mutex> lock(mutex_);
 
     if (transactions_.find(transaction_id) == transactions_.end()) {
-        std::cerr << "[ERROR] Transaksi " << transaction_id << " tidak ditemukan pada end_transaction" << std::endl;
+        std::cerr << "[ERROR] Transaksi " << transaction_id
+                  << " tidak ditemukan pada end_transaction" << std::endl;
         return;
     }
 
