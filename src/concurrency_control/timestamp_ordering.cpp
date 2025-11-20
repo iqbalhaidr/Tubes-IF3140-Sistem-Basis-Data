@@ -110,5 +110,55 @@ Response TimestampCCManager::validate_object(const Row& object, int transaction_
 
     return Response(true, transaction_id);
 }
+void TimestampCCManager::end_transaction(int transaction_id) {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    if (transactions_.find(transaction_id) == transactions_.end()) {
+        throw std::runtime_error("Transaksi " + std::to_string(transaction_id) +
+                                 " tidak ditemukan");
+    }
+
+    auto transaction = transactions_[transaction_id];
+
+    // Transisi state transaksi berdasarkan properti ACID:
+    // ACTIVE -> PARTIALLY_COMMITTED -> COMMITTED (jalur sukses)
+    // ACTIVE -> FAILED -> ABORTED -> TERMINATED (jalur gagal)
+
+    if (transaction->state == TransactionStatus::FAILED) {
+        std::cout << "CCM: Transaksi " << transaction_id
+                  << " melakukan rollback (FAILED -> ABORTED)" << std::endl;
+        transaction->state = TransactionStatus::ABORTED;
+
+        // TODO: Lakukan rollback sebenarnya (koordinasi dengan Failure Recovery Manager)
+        // Untuk saat ini, hanya transisi ke TERMINATED
+        std::cout << "CCM: Transaksi " << transaction_id << " dihentikan (rollback selesai)"
+                  << std::endl;
+        transaction->state = TransactionStatus::TERMINATED;
+    } else if (transaction->state == TransactionStatus::ABORTED) {
+        std::cout << "CCM: Transaksi " << transaction_id << " dihentikan (sudah ABORTED)"
+                  << std::endl;
+        transaction->state = TransactionStatus::TERMINATED;
+    } else if (transaction->state == TransactionStatus::ACTIVE) {
+        std::cout << "CCM: Transaksi " << transaction_id << " memasuki state PARTIALLY_COMMITTED"
+                  << std::endl;
+        transaction->state = TransactionStatus::PARTIALLY_COMMITTED;
+
+        // TODO: Lakukan flush perubahan ke stable storage melalui Failure Recovery Manager
+
+        // Setelah berhasil flush ke stable storage:
+        std::cout << "CCM: Transaksi " << transaction_id << " COMMITTED dengan sukses" << std::endl;
+        transaction->state = TransactionStatus::COMMITTED;
+
+        // Transaksi sekarang durable, bisa di-terminate
+        transaction->state = TransactionStatus::TERMINATED;
+    } else {
+        std::cout << "CCM: Transaksi " << transaction_id << " sudah dalam state terminal"
+                  << std::endl;
+        transaction->state = TransactionStatus::TERMINATED;
+    }
+
+    // Hapus transaksi dari transaksi aktif
+    transactions_.erase(transaction_id);
+}
 
 }  // namespace mdbms::ccm
