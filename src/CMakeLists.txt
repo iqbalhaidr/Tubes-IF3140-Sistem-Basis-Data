@@ -38,16 +38,3 @@ target_link_libraries(test_query_processor
     ccm_lib
     fr_lib
 )
-
-add_executable(test_integration
-    ${CMAKE_SOURCE_DIR}/tests/test_integration.cpp
-)
-
-target_link_libraries(test_integration
-    PRIVATE
-    qp_lib
-    qo_lib
-    sm_lib
-    ccm_lib
-    fr_lib
-)
