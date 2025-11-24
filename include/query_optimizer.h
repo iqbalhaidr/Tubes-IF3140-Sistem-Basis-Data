@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "types.h"
+#include "storage_manager.h"
 
 namespace mdbms::qo {
     struct QueryTree {
@@ -96,5 +97,6 @@ QueryTree* optimize_tree(QueryTree* plan,
                         const std::vector<Condition>& where_conditions,
                         const std::vector<std::string>& from_tables,
                         const std::vector<std::string>& select_columns);
+int estimate_cost(const QueryTree& root, const mdbms::sm::StorageEngine* storage);
 
 }  // namespace mdbms::qo
