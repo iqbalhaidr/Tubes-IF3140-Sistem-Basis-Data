@@ -3,6 +3,63 @@
 #include <iostream>
 #include <iomanip>
 
+// yg ditambahin buat cost estimation
+#include <unordered_map>
+#include <cctype>
+
+namespace mdbms::sm {
+StorageEngine::StorageEngine() = default;
+StorageEngine::StorageEngine(const std::string& /*data_dir*/) {}
+std::optional<Statistic> StorageEngine::get_stat(const std::string& table) const {
+    auto to_lower = [](const std::string& s) {
+        std::string out;
+        out.reserve(s.size());
+        for (char c : s) out.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+        return out;
+    };
+
+    const std::string key = to_lower(table);
+    const std::unordered_map<std::string, Statistic> kStats = {
+        {"student",
+         [] {
+             Statistic s;
+             s.table_name = "student";
+             s.n_r = 1000;
+             s.b_r = 20;
+             s.f_r = 50;
+             s.V_a_r = {{"id", 1000}, {"dept_id", 10}, {"apt_id", 50}, {"age", 60}};
+             return s;
+         }()},
+        {"dept",
+         [] {
+             Statistic s;
+             s.table_name = "dept";
+             s.n_r = 10;
+             s.b_r = 2;
+             s.f_r = 30;
+             s.V_a_r = {{"id", 10}, {"size", 10}, {"location", 3}, {"nama", 10}};
+             return s;
+         }()},
+        {"apt",
+         [] {
+             Statistic s;
+             s.table_name = "apt";
+             s.n_r = 50;
+             s.b_r = 5;
+             s.f_r = 40;
+             s.V_a_r = {{"id", 50}, {"name", 50}, {"type", 5}, {"active", 2}};
+             return s;
+         }()},
+    };
+
+    auto it = kStats.find(key);
+    if (it != kStats.end()) {
+        return it->second;
+    }
+    return std::nullopt;
+}
+}  // namespace mdbms::sm
+
 // Cara test:
 //   cmake -S . -B build
 //   cmake --build build --target test_query_optimizer
@@ -79,6 +136,10 @@ int main() {
         std::cout << "Initial Query Tree:\n";
         print_tree(parsed_query.query_tree);
         std::cout << "\n";
+        // yg ditambahin buat cost estimation
+        mdbms::sm::StorageEngine storage;
+        const int initial_cost = mdbms::qo::estimate_cost(*parsed_query.query_tree, &storage);
+        std::cout << "Estimated initial cost: " << initial_cost << "\n\n";
         
         mdbms::qo::ParsedQuery optimized_query = opt.optimize_query(parsed_query);  
         if (!optimized_query.query_tree) {
@@ -86,6 +147,9 @@ int main() {
         } else {
             std::cout << "Optimized Query Tree:\n";
             print_tree(optimized_query.query_tree);
+            // yg ditambahin buat cost estimation
+            const int optimized_cost = mdbms::qo::estimate_cost(*optimized_query.query_tree, &storage);
+            std::cout << "Estimated optimized cost: " << optimized_cost << "\n";
         }
     }
 
