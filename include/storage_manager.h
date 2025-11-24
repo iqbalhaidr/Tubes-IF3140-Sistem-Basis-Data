@@ -13,6 +13,9 @@ class StorageEngine {
 public:
     StorageEngine();
     StorageEngine(const std::string& data_dir);
+    
+    static StorageEngine& get_instance();
+
     Rows<Row> read_block(const DataRetrieval& retrieval);
     int write_block(const DataWrite<Row>& write);
     int delete_block(const DataDeletion& deletion);

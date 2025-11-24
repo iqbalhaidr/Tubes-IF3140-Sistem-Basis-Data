@@ -2,6 +2,11 @@
 
 namespace mdbms::qo {
 
+OptimizationEngine& OptimizationEngine::get_instance() {
+    static OptimizationEngine instance;
+    return instance;
+}
+
 OptimizationEngine::OptimizationEngine() = default;
 OptimizationEngine::~OptimizationEngine() = default;
 

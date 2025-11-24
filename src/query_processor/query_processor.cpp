@@ -16,14 +16,14 @@ QueryProcessor::QueryProcessor(std::shared_ptr<mdbms::qo::OptimizationEngine> op
                                std::shared_ptr<mdbms::fr::FailureRecoveryManager> recovery)
     : current_transaction_id(-1) {
     if (optimizer) {
-        qo_engine = std::move(optimizer);
+        qo_engine = optimizer.get();
     } else {
-        qo_engine = std::make_shared<mdbms::qo::OptimizationEngine>();
+        qo_engine = &mdbms::qo::OptimizationEngine::get_instance();
     }
     if (storage) {
-        sm_engine = std::move(storage);
+        sm_engine = storage.get();
     } else {
-        sm_engine = std::make_shared<mdbms::sm::StorageEngine>();
+        sm_engine = &mdbms::sm::StorageEngine::get_instance();
     }
     if (concurrency) {
         ccm_manager = concurrency.get();

@@ -53,8 +53,8 @@ public:
     Rows<Row> apply_order_by(const Rows<Row>& rows, const std::string& column, bool ascending);
     Rows<Row> apply_limit(const Rows<Row>& rows, int limit);
 private:
-    std::shared_ptr<mdbms::qo::OptimizationEngine> qo_engine;
-    std::shared_ptr<mdbms::sm::StorageEngine> sm_engine;
+    mdbms::qo::OptimizationEngine* qo_engine;  // Singleton - non-owning pointer
+    mdbms::sm::StorageEngine* sm_engine;  // Singleton - non-owning pointer
     mdbms::ccm::ConcurrencyControlManager* ccm_manager;  // Singleton - non-owning pointer
     mdbms::fr::FailureRecoveryManager* frm_manager;  // Singleton - non-owning pointer
 

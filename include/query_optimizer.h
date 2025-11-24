@@ -83,6 +83,8 @@ class OptimizationEngine {
     OptimizationEngine();
     ~OptimizationEngine();
 
+    static OptimizationEngine& get_instance();
+
     ParsedQuery parse_query(const std::string& query);
     ParsedQuery optimize_query(const ParsedQuery& query);
 };

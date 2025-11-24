@@ -15,6 +15,11 @@
 
 namespace mdbms::sm {
 
+StorageEngine& StorageEngine::get_instance() {
+    static StorageEngine instance;
+    return instance;
+}
+
 StorageEngine::StorageEngine() : data_dir_("data") {}
 
 StorageEngine::StorageEngine(const std::string& data_dir) : data_dir_(data_dir) {}
