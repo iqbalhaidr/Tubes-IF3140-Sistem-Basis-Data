@@ -6,6 +6,7 @@
 #include <cstring>
 #include <unordered_map>
 #include <any>
+#include <optional>
 
 namespace mdbms::sm {
 
@@ -23,6 +24,8 @@ public:
 
     std::unordered_map<std::string, std::string> table_index;      // table -> column
     std::unordered_map<std::string, IndexType> table_index_type;   // table -> type
+
+    std::optional<Statistic> build_dummy_get_stat(const std::string& table) const; // izin nambah buat dummy cost qo
 
 private:
     std::string data_dir_;
