@@ -365,6 +365,35 @@ bool test_delete_parsing() {
     return true;
 }
 
+bool test_transaction_control_parsing() {
+    std::cout << "\n[TEST] Transaction control parsing\n";
+    mdbms::qo::OptimizationEngine opt;
+    const std::vector<std::pair<std::string, std::string>> cases = {
+        {"BEGIN TRANSACTION;", "BEGIN"},
+        {"COMMIT;", "COMMIT"},
+        {"ROLLBACK;", "ROLLBACK"},
+    };
+
+    for (const auto& [sql, expected_type] : cases) {
+        mdbms::qo::ParsedQuery parsed = opt.parse_query(sql);
+        if (!expect(parsed.query_type == expected_type, "Transaction query type should be " + expected_type)) {
+            return false;
+        }
+        if (!expect(parsed.query_tree != nullptr, "Transaction query tree should be created")) {
+            return false;
+        }
+        if (!expect(parsed.query_tree->type == expected_type, "Query tree type should match transaction type")) {
+            return false;
+        }
+        if (!expect(parsed.table_references.empty(), "Transaction statements should have no table references")) {
+            return false;
+        }
+    }
+
+    std::cout << "[PASS] Transaction control parsing test\n";
+    return true;
+}
+
 bool test_create_table_parsing() {
     std::cout << "\n[TEST] CREATE TABLE parsing\n";
     mdbms::qo::OptimizationEngine opt;
@@ -444,6 +473,10 @@ void print_debug_info() {
         {"Double join campus overview",
          "SELECT s.name, d.nama, a.name FROM student s INNER JOIN dept d ON s.dept_id = d.id "
          "INNER JOIN apt a ON s.apt_id = a.id WHERE s.age > 20 AND a.active = 1;"},
+        {"Explicit AS aliases",
+         "SELECT s.name AS student_name, d.nama AS dept_name "
+         "FROM student AS s INNER JOIN dept AS d ON s.dept_id = d.id "
+         "WHERE d.location = 'north';"},
         {"Update payroll",
          "UPDATE employee SET salary = salary + 100 WHERE dept_id = 2;",
          false},
@@ -458,6 +491,15 @@ void print_debug_info() {
          false},
         {"Drop legacy table",
          "DROP TABLE legacy_student;",
+         false},
+        {"Begin transaction",
+         "BEGIN TRANSACTION;",
+         false},
+        {"Commit transaction",
+         "COMMIT;",
+         false},
+        {"Rollback transaction",
+         "ROLLBACK;",
          false},
     };
 
@@ -480,6 +522,7 @@ int main() {
         {"UPDATE parsing", test_update_parsing},
         {"INSERT parsing", test_insert_parsing},
         {"DELETE parsing", test_delete_parsing},
+        {"Transaction control parsing", test_transaction_control_parsing},
         {"CREATE TABLE parsing", test_create_table_parsing},
         {"DROP TABLE parsing", test_drop_table_parsing},
         {"Query tree && cost", test_query_tree_and_cost},

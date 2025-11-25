@@ -66,6 +66,8 @@ ParsedQuery sql_parser(const std::string& query) {
         parse_create_table(pq.original_query, pq);
     } else if (pq.query_type == "DROP") {
         parse_drop_table(pq.original_query, pq);
+    } else if (pq.query_type == "BEGIN" || pq.query_type == "COMMIT" ||
+               pq.query_type == "ROLLBACK") {
     }
 
     return pq;
