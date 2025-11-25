@@ -3,9 +3,11 @@
 #include <memory>
 #include <map>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "types.h"
+#include "storage_manager.h"
 
 namespace mdbms::qo {
     struct QueryTree {
@@ -47,6 +49,42 @@ namespace mdbms::qo {
         }
     };
 
+    struct TableReference {
+        std::string table_name;
+        std::string alias;
+        bool introduced_by_join;
+
+        TableReference() : introduced_by_join(false) {}
+        TableReference(std::string table, std::string alias_name = "", bool is_join = false)
+            : table_name(std::move(table)),
+              alias(std::move(alias_name)),
+              introduced_by_join(is_join) {}
+    };
+
+    struct JoinClause {
+        std::string join_type;  // NATURAL
+        TableReference table;
+        std::string left_expression;
+        std::string right_expression;
+        bool is_natural;
+
+        JoinClause()
+            : join_type("INNER"), is_natural(false) {}
+    };
+
+    struct ColumnDefinition {
+        std::string name;
+        std::string data_type;
+        int length;
+        bool is_primary_key;
+        bool is_foreign_key;
+        std::string references_table;
+        std::string references_column;
+
+        ColumnDefinition()
+            : length(0), is_primary_key(false), is_foreign_key(false) {}
+    };
+
     struct ParsedQuery {
         std::string original_query;
         std::string query_type;
@@ -55,8 +93,11 @@ namespace mdbms::qo {
 
         std::vector<std::string> select_columns;
         std::vector<std::string> from_tables;
+        std::vector<TableReference> table_references;
+        std::map<std::string, std::string> table_aliases;
         std::vector<Condition> where_conditions;
         std::vector<std::pair<std::string, std::string>> join_pairs;  // Join conditions
+        std::vector<JoinClause> join_clauses;
         std::string order_by_column;                                  // Kolom untuk ORDER BY
         bool order_ascending;                                         // ASC atau DESC
         int limit_value;                                              // Nilai LIMIT
@@ -66,6 +107,13 @@ namespace mdbms::qo {
 
         // For INSERT
         std::vector<std::any> insert_values;  // VALUES (...)
+        std::vector<std::string> insert_columns;
+
+        // CREATE TABLE
+        std::vector<ColumnDefinition> column_definitions;
+
+        // Target table untuk UPDATE/DELETE/INSERT/CREATE/DROP
+        std::string target_table;
 
         ParsedQuery()
             : query_tree(nullptr), estimated_cost(0), order_ascending(true), limit_value(-1) {
@@ -96,5 +144,6 @@ QueryTree* optimize_tree(QueryTree* plan,
                         const std::vector<Condition>& where_conditions,
                         const std::vector<std::string>& from_tables,
                         const std::vector<std::string>& select_columns);
+int estimate_cost(const QueryTree& root, const mdbms::sm::StorageEngine* storage);
 
 }  // namespace mdbms::qo
