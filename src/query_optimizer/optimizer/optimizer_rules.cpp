@@ -23,7 +23,6 @@ QueryTree* splitting_conjunction(QueryTree* plan,
         size_t pos = v.find(" AND ");
 
         if (pos != std::string::npos) {
-            // pecah kiri dan kanan
             std::string left = trim_outer(v.substr(0, pos));
             std::string right = trim_outer(v.substr(pos + 5));
 
@@ -56,7 +55,6 @@ QueryTree* reorder_selections(QueryTree* plan,
     QueryTree* deepest_non_select = nullptr;
     
     while (current && current->type == "SELECT") {
-
         const Condition* matching_cond = nullptr;
         for (const auto& cond : where_conditions) {
             std::string cond_str = cond.column + " " + cond.operation;
@@ -68,6 +66,10 @@ QueryTree* reorder_selections(QueryTree* plan,
         
         if (matching_cond) {
             select_values.push_back({current->value, matching_cond});
+        } else {
+            Condition dummy;
+            dummy.operation = "default";
+            select_values.push_back({current->value, nullptr});
         }
         
         if (current->children.size() == 1) {
@@ -82,7 +84,12 @@ QueryTree* reorder_selections(QueryTree* plan,
     if (select_values.size() > 1) {
         std::stable_sort(select_values.begin(), select_values.end(),
             [](const auto& a, const auto& b) {
-                return estimate_selectivity(*a.second) > estimate_selectivity(*b.second);
+                if (a.second && b.second) {
+                    return estimate_selectivity(*a.second) > estimate_selectivity(*b.second);
+                }
+                if (a.second) return true;
+                if (b.second) return false;
+                return false;
             });
 
         QueryTree* new_chain = deepest_non_select;
@@ -185,7 +192,6 @@ QueryTree* redundant_projection(QueryTree* plan,
     QueryTree* child = plan->children[0];
     std::vector<std::string> plan_cols = parse_project_columns(plan->value);
 
-    // Hapus projeksi yang duplikat berturut-turut
     if (child->type == "PROJECT") {
         std::vector<std::string> child_cols = parse_project_columns(child->value);
         
@@ -217,7 +223,6 @@ QueryTree* redundant_projection(QueryTree* plan,
         }
     }
 
-    // Hapus projeksi yang tidak mengurangi kolom
     std::set<std::string> used_below;
     get_subtree_columns(child, used_below);
     
