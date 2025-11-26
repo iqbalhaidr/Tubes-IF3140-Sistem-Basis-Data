@@ -17,14 +17,20 @@ public:
     int write_block(const DataWrite<Row>& write);
     int delete_block(const DataDeletion& deletion);
     void set_index(const std::string& table, const std::string& column, const IndexType index_type);
+    std::map<std::string, Statistic> get_stats();
+    std::vector<TableSchema> get_tables();
 
     std::unordered_map<std::string, std::string> table_index;      // table -> column
     std::unordered_map<std::string, IndexType> table_index_type;   // table -> type
 
+    
+
 private:
     std::string data_dir_;
 
-    TableSchema getSchema(const std::string& table);
+    TableSchema getSchema(const std::string& table); // legacy function, keeping it for now
+    TableSchema read_schema(const std::string& table);
+    void create_schema(const TableSchema& schema);
     void serialize_row(std::ostream& out, const Row& row, const TableSchema& schema);
     Row deserialize_row(std::istream& in, const TableSchema& schema);
     bool check_conditions(const Row& row, const std::vector<Condition>& conditions);

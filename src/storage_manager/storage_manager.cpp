@@ -11,6 +11,7 @@
 #include <type_traits>
 #include <vector>
 #include <unordered_map>
+#include <unordered_set>
 #include <filesystem>
 
 namespace mdbms::sm {
@@ -347,6 +348,310 @@ TableSchema StorageEngine::getSchema(const std::string& table) {
         return schema;
     }
     throw std::runtime_error("Skema tidak ditemukan untuk tabel: " + table);
+}
+
+// belom ada pengecekan buat apakah size valid, primary key valid, etc, blom ada pengecekan pokoknya, 
+// not sure we need one but just keep that in mind
+TableSchema StorageEngine::read_schema(const std::string& table) {
+    std::string schema_filename = data_dir_ + "/" + table + ".schema";
+    std::ifstream infile(schema_filename, std::ios::binary);
+
+    TableSchema result;
+
+    if (!infile.is_open()) {
+        std::cerr << "SM: Gagal membuka file schema" << std::endl;
+        throw std::runtime_error("File skema tidak ditemukan untuk tabel: " + table);
+    }
+
+    // read number of columns
+    uint16_t columns_len;
+    infile.read(reinterpret_cast<char*>(&columns_len), sizeof(columns_len));
+    if (infile.gcount() != sizeof(columns_len) || !infile) {
+        std::cerr << "SM: Error membaca banyak kolom pada file schema " << table << std::endl;
+        throw std::runtime_error("File skema korup untuk tabel: " + table);
+    }
+    
+    for (uint16_t i = 0; i < columns_len; i++) {
+        // read column's name's length
+        uint32_t col_name_len;
+        infile.read(reinterpret_cast<char*>(&col_name_len), sizeof(col_name_len));
+        if (infile.gcount() != sizeof(col_name_len) || !infile) {
+            std::cerr << "SM: Error membaca panjang nama kolom pada file schema " << table << std::endl;
+            throw std::runtime_error("File skema korup untuk tabel: " + table);
+        }
+        // read column's name
+        std::string column_name(col_name_len, '\0');
+        infile.read(&column_name[0], col_name_len);
+        if (infile.gcount() != static_cast<std::streamsize>(col_name_len) || !infile) {
+            std::cerr << "SM: Error membaca nama kolom pada file schema " << table << std::endl;
+            throw std::runtime_error("File skema korup untuk tabel: " + table);
+        }
+        result.column_names.push_back(column_name);
+        // read column's data type
+        uint8_t column_type;
+        infile.read(reinterpret_cast<char*>(&column_type), sizeof(column_type));
+        if (infile.gcount() != sizeof(column_type) || !infile) {
+            std::cerr << "SM: Error membaca tipe data kolom pada file schema " << table << std::endl;
+            throw std::runtime_error("File skema korup untuk tabel: " + table);
+        }
+        result.column_types.push_back(static_cast<DataType>(column_type));
+        // read column's size
+        uint32_t column_size;
+        infile.read(reinterpret_cast<char*>(&column_size), sizeof(column_size));
+        if (infile.gcount() != sizeof(column_size) || !infile) {
+            std::cerr << "SM: Error membaca besar kolom pada file schema " << table << std::endl;
+            throw std::runtime_error("File skema korup untuk tabel: " + table);
+        }
+        result.column_sizes.push_back(column_size);
+    }
+    // read table's primary key length
+    uint32_t primary_key_len;
+    infile.read(reinterpret_cast<char*>(&primary_key_len), sizeof(primary_key_len));
+    if (infile.gcount() != sizeof(primary_key_len) || !infile) {
+        std::cerr << "SM: Error membaca panjang nama primary key pada file schema " << table << std::endl;
+        throw std::runtime_error("File skema korup untuk tabel: " + table);
+    }
+    // read primary key's name
+    std::string primary_key(primary_key_len, '\0');
+    infile.read(&primary_key[0], primary_key_len);
+    if (infile.gcount() != static_cast<std::streamsize>(primary_key_len) || !infile) {
+        std::cerr << "SM: Error membaca nama primary key pada file schema " << table << std::endl;
+        throw std::runtime_error("File skema korup untuk tabel: " + table);
+    }
+    result.primary_key = primary_key;
+
+    infile.close();
+    return result;
+}
+
+void StorageEngine::create_schema(const TableSchema& schema) {
+    std::string schema_filename = data_dir_ + "/" + schema.table_name + ".schema";
+    std::string tables_filename = data_dir_ + "/tables.meta";
+    std::ofstream outfile(schema_filename, std::ios::binary);
+    std::fstream tables_iofile(tables_filename, std::ios::in | std::ios::out |std::ios::binary);
+
+    if (!outfile.is_open()) {
+        std::cerr << "SM: Gagal membuka file schema untuk tabel: " << schema.table_name << std::endl;
+        throw std::runtime_error("Gagal membuka file schema");
+    }
+    if (!tables_iofile.is_open()) {
+        std::cerr << "SM: Gagal membuka file tables.meta" << std::endl;
+        throw std::runtime_error("Gagal membuka file tables.meta");
+    }
+
+    // creating tables metadata that have all the tables name
+    if (tables_iofile.tellg()) { // if its the first table in a database
+        uint16_t tables_len = 1;
+        tables_iofile.write(reinterpret_cast<const char*>(&tables_len), sizeof(tables_len));
+        if (!tables_iofile) {
+            std::cerr << "SM: Error menulis jumlah kolom ke file." << std::endl;
+            throw std::runtime_error("Gagal menulis jumlah kolom ke file");
+        }
+        uint32_t table_name_len = static_cast<uint32_t>(schema.table_name.length());
+        tables_iofile.write(reinterpret_cast<const char*>(&table_name_len), sizeof(table_name_len));
+        if (!tables_iofile) {
+            std::cerr << "SM: Error menulis panjang nama kolom ke file." << std::endl;
+            throw std::runtime_error("Gagal menulis panjang nama kolom ke file");
+        }
+        tables_iofile.write(schema.table_name.c_str(), table_name_len);
+        if (!tables_iofile) {
+            std::cerr << "SM: Error menulis nama kolom ke file." << std::endl;
+            throw std::runtime_error("Gagal menulis nama kolom ke file");
+        }
+    }
+    else {
+        // read and update tables len
+        uint16_t tables_len;
+        tables_iofile.read(reinterpret_cast<char*>(&tables_len), sizeof(tables_len));
+        if (tables_iofile.gcount() != sizeof(tables_len) || !tables_iofile) {
+            std::cerr << "SM: Error membaca panjang nama table pada file tables.meta" << std::endl;
+            throw std::runtime_error("File tables.meta korup dan gagal dibaca");
+        }
+        tables_iofile.clear(); // clear flag before changing to write
+        tables_iofile.seekp(0, std::ios_base::beg);
+        tables_len += 1; // add one table
+        tables_iofile.write(reinterpret_cast<const char*>(&tables_len), sizeof(tables_len));
+        if (!tables_iofile) {
+            std::cerr << "SM: Error menulis nama tabel ke file tables.meta" << std::endl;
+            throw std::runtime_error("Gagal menulis nama tabel ke file tables.meta");
+        }
+
+        // write tables name
+        tables_iofile.seekp(0, std::ios_base::end);
+        uint32_t table_name_len = static_cast<uint32_t>(schema.table_name.length());
+        tables_iofile.write(reinterpret_cast<const char*>(&table_name_len), sizeof(table_name_len));
+        if (!tables_iofile) {
+            std::cerr << "SM: Error menulis panjang nama kolom ke file." << std::endl;
+            throw std::runtime_error("Gagal menulis panjang nama kolom ke file");
+        }
+        tables_iofile.write(schema.table_name.c_str(), table_name_len);
+        if (!tables_iofile) {
+            std::cerr << "SM: Error menulis nama kolom ke file." << std::endl;
+            throw std::runtime_error("Gagal menulis nama kolom ke file");
+        }
+    }
+    tables_iofile.close();
+
+    // write number of columns (aint no way number of columns exceed 2^16)
+    uint16_t columns_len = schema.column_names.size();
+    outfile.write(reinterpret_cast<const char*>(&columns_len), sizeof(columns_len));
+    if (!outfile) {
+        std::cerr << "SM: Error menulis jumlah kolom ke file." << std::endl;
+        throw std::runtime_error("Gagal menulis jumlah kolom ke file");
+    }
+
+    for (int i = 0; i < columns_len; i++) {
+        // write column's name's length
+        uint32_t col_name_len = static_cast<uint32_t>(schema.column_names[i].length());
+        outfile.write(reinterpret_cast<const char*>(&col_name_len), sizeof(col_name_len));
+        if (!outfile) {
+            std::cerr << "SM: Error menulis panjang nama kolom ke file." << std::endl;
+            throw std::runtime_error("Gagal menulis panjang nama kolom ke file");
+        }
+        // write column's name
+        outfile.write(schema.column_names[i].c_str(), col_name_len);
+        if (!outfile) {
+            std::cerr << "SM: Error menulis nama kolom ke file." << std::endl;
+            throw std::runtime_error("Gagal menulis nama kolom ke file");
+        }
+        // write column's data type according to the enum
+        uint8_t column_type = static_cast<uint8_t>(schema.column_types[i]);
+        outfile.write(reinterpret_cast<const char*>(&column_type), sizeof(column_type));
+        if (!outfile) {
+            std::cerr << "SM: Error menulis tipe data kolom ke file." << std::endl;
+            throw std::runtime_error("Gagal menulis tipe data kolom ke file");
+        }
+        // write column's size
+        uint32_t column_size = static_cast<uint32_t>(schema.column_sizes[i]);
+        outfile.write(reinterpret_cast<const char*>(&column_size), sizeof(column_size));
+        if (!outfile) {
+            std::cerr << "SM: Error menulis panjang nama kolom ke file." << std::endl;
+            throw std::runtime_error("Gagal menulis panjang nama kolom ke file");
+        }
+    }
+    // write column's primary key
+    uint32_t primary_key_len = static_cast<uint32_t>(schema.primary_key.length());
+    outfile.write(reinterpret_cast<const char*>(&primary_key_len), sizeof(primary_key_len));
+    if (!outfile) {
+        std::cerr << "SM: Error menulis panjang nama primary key ke file." << std::endl;
+        throw std::runtime_error("Gagal menulis panjang nama primary key ke file");
+    }
+    outfile.write(schema.primary_key.c_str(), primary_key_len);
+    if (!outfile) {
+        std::cerr << "SM: Error menulis nama primary key ke file." << std::endl;
+        throw std::runtime_error("Gagal menulis nama primary key ke file");
+    }
+    outfile.close();
+}
+
+std::map<std::string, Statistic> StorageEngine::get_stats() {
+    int BLOCK_SIZE = 4096; 
+
+    std::vector<TableSchema> tables = get_tables();
+    std::map<std::string, Statistic> result;
+
+    for (const TableSchema& table : tables) {
+        Statistic stats;
+        std::string filename = data_dir_ + "/" + table.table_name + ".dat";
+        std::ifstream file(filename, std::ios::binary);
+        if (!file.is_open()) {
+            std::cerr << "SM: Gagal membuka file: " << filename << std::endl;
+            return result;
+        }
+
+        int file_size = std::filesystem::file_size(filename);
+        stats.n_r = table.column_names.size();
+        stats.b_r = (file_size / BLOCK_SIZE) + 1; // should be always positive so its fine to truncate toward zero
+
+        int tuple_size = 0;
+        for (int i = 0; i < table.column_types.size(); i++) {
+            if (table.column_types[i] == DataType::INTEGER) tuple_size += sizeof(int32_t);
+            else if (table.column_types[i] == DataType::FLOAT) tuple_size += sizeof(float);
+            else if (table.column_types[i] == DataType::VARCHAR || table.column_types[i] == DataType::CHAR) {
+                tuple_size += sizeof(uint32_t);
+
+                // jujur bingung emg kalo CHAR, panjangnya bisa lebih dari 1 kah? 
+                // tapi di TableSchema katanya column_sizes buat varchar DAN char, so for now gini dulu
+                tuple_size += sizeof(char) * table.column_sizes[i]; 
+            }
+        }
+        stats.l_r = tuple_size;
+        stats.f_r = BLOCK_SIZE / tuple_size;
+
+        std::map<std::string, int> distinct_values; 
+        std::unordered_map<std::string, std::unordered_set<std::string>> distinct_values_count;
+
+        while (file.peek() != EOF) {
+            Row row = deserialize_row(file, table);
+            if (row.columns.empty()) {
+                if (file.eof()) break;
+                std::cerr << "SM: Error membaca baris data." << std::endl;
+                break;
+            }
+
+            for (auto& col : row.columns) {
+                std::string hash_key = col.first + to_string_any(col.second);
+                auto it = distinct_values_count.find(hash_key);
+                if (it != distinct_values_count.end()) {
+                    it->second.insert(col.first);
+                }
+                else {
+                    distinct_values_count[hash_key].insert(col.first);
+                }
+            }
+        }
+        
+        for (auto& distinct_val : distinct_values_count) {
+            for (auto& distinct_val_col : distinct_val.second) {
+                distinct_values[distinct_val_col]++; 
+            }
+        }
+        stats.V_a_r = distinct_values;
+
+        result.insert({table.table_name, stats});
+        file.close();
+    }
+
+    return result;
+}
+
+std::vector<TableSchema> StorageEngine::get_tables() {
+    std::string tables_filename = data_dir_ + "/tables.meta";
+    std::ifstream tables_infile(tables_filename, std::ios::binary);
+    std::vector<TableSchema> result;
+    std::vector<std::string> tables;
+
+    uint16_t tables_len;
+    tables_infile.read(reinterpret_cast<char*>(&tables_len), sizeof(tables_len));
+    if (tables_infile.gcount() != sizeof(tables_len) || !tables_infile) {
+        std::cerr << "SM: Error membaca panjang nama table pada file tables.meta" << std::endl;
+        throw std::runtime_error("File tables.meta korup dan gagal dibaca");
+    }
+
+    // read tables' name
+    for (uint16_t i = 0; i < tables_len; i++) {
+        uint32_t table_name_len;
+        tables_infile.read(reinterpret_cast<char*>(&table_name_len), sizeof(table_name_len));
+        if (tables_infile.gcount() != sizeof(table_name_len) || !tables_infile) {
+            std::cerr << "SM: Error membaca panjang nama table pada file tables.meta" << std::endl;
+            throw std::runtime_error("File tables.meta korup");
+        }
+        std::string table_name(table_name_len, '\0');
+        tables_infile.read(&table_name[0], table_name_len);
+        if (tables_infile.gcount() != static_cast<std::streamsize>(table_name_len) || !tables_infile) {
+            std::cerr << "SM: Error membaca nama kolom pada file tables.meta " << std::endl;
+            throw std::runtime_error("File tables.meta korup");
+        }
+        tables.push_back(table_name);
+    }
+
+    // read table schema
+    for (const std::string& table : tables) {
+        result.push_back(read_schema(table));
+    }
+
+    tables_infile.close();
+    return result;
 }
 
 void StorageEngine::serialize_row(std::ostream& out, const Row& row, const TableSchema& schema) {
@@ -1104,5 +1409,19 @@ bool StorageEngine::any_to_string(const std::any &a, std::string &out) {
         if (a.type() == typeid(const char*)) { out = std::any_cast<const char*>(a); return true; }
     } catch (const std::bad_any_cast&) { return false; }
     return false;
+}
+
+// helper
+std::string to_string_any(const std::any& a) {
+    if (a.type() == typeid(std::string)) return std::any_cast<std::string>(a);
+    if (a.type() == typeid(const char*)) return std::string(std::any_cast<const char*>(a));
+    if (a.type() == typeid(int)) return std::to_string(std::any_cast<int>(a));
+    if (a.type() == typeid(double)) return std::to_string(std::any_cast<double>(a));
+    if (a.type() == typeid(int32_t))  return std::to_string(std::any_cast<int32_t>(a));
+    if (a.type() == typeid(float))  return std::to_string(std::any_cast<float>(a));
+    if (a.type() == typeid(int64_t))  return std::to_string(std::any_cast<int64_t>(a));
+    if (a.type() == typeid(uint32_t))  return std::to_string(std::any_cast<uint32_t>(a));
+
+    throw std::runtime_error("SM: unsupported type in helper function to_string_any");
 }
 } // namespace mdbms::sm
