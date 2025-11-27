@@ -48,6 +48,8 @@ public:
     int execute_update(const mdbms::qo::ParsedQuery& parsed_query, int transaction_id);
     int execute_insert(const mdbms::qo::ParsedQuery& parsed_query, int transaction_id);
     int execute_delete(const mdbms::qo::ParsedQuery& parsed_query, int transaction_id);
+    bool execute_create_table(const mdbms::qo::ParsedQuery& parsed_query, int transaction_id);
+    bool execute_drop_table(const mdbms::qo::ParsedQuery& parsed_query, int transaction_id);
     Rows<Row> execute_join(const Rows<Row>& left_table, const Rows<Row>& right_table, const Condition& join_condition, const std::string& join_type);
     Rows<Row> apply_where_clause(const Rows<Row>& rows,const std::vector<Condition>& conditions);
     Rows<Row> apply_order_by(const Rows<Row>& rows, const std::string& column, bool ascending);

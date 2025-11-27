@@ -21,6 +21,11 @@ public:
     int write_block(const DataWrite<Row>& write);
     int delete_block(const DataDeletion& deletion);
     void set_index(const std::string& table, const std::string& column, const IndexType index_type);
+    
+    bool create_table(const TableSchema& schema);
+    bool drop_table(const std::string& table_name);
+    
+    std::vector<std::string> get_column_names(const std::string& table);
 
     std::unordered_map<std::string, std::string> table_index;      // table -> column
     std::unordered_map<std::string, IndexType> table_index_type;   // table -> type

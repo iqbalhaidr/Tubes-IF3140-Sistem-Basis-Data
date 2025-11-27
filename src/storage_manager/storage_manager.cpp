@@ -190,15 +190,31 @@ int StorageEngine::write_block(const DataWrite<Row>& write) {
     }
 
     std::string filename = data_dir_ + "/" + write.table + ".dat";
+    std::cout << "[DEBUG] SM write_block: filename = " << filename << std::endl;
+    std::cout << "[DEBUG] SM write_block: schema.column_names.size() = " << schema.column_names.size() << std::endl;
+    std::cout << "[DEBUG] SM write_block: write.new_value.columns.size() = " << write.new_value.columns.size() << std::endl;
+    std::cout << "[DEBUG] SM write_block: write.new_value.columns: ";
+    for (const auto& pair : write.new_value.columns) {
+        std::cout << pair.first << " ";
+    }
+    std::cout << std::endl;
+    std::cout << "[DEBUG] SM write_block: schema.column_names order: ";
+    for (const auto& col : schema.column_names) {
+        std::cout << col << " ";
+    }
+    std::cout << std::endl;
 
     // INSERT no condition
     if (write.conditions.empty()) {
+        std::cout << "[DEBUG] SM write_block: Opening file for append..." << std::endl;
         std::ofstream file(filename, std::ios::binary | std::ios::app);
 
         if (!file.is_open()) {
-            std::cerr << "SM: Gagal membuka file: " << filename << std::endl;
+            std::cerr << "[DEBUG] SM: Gagal membuka file: " << filename << std::endl;
+            std::cerr << "[DEBUG] SM: Error details - file may not exist or directory may not exist" << std::endl;
             return 0;
         }
+        std::cout << "[DEBUG] SM write_block: File opened successfully" << std::endl;
 
         file.seekp(0, std::ios::end);
         int64_t row_offset = file.tellp();
@@ -331,8 +347,17 @@ int StorageEngine::delete_block(const DataDeletion& deletion) {
     return affected_rows;
 }
 
+std::vector<std::string> StorageEngine::get_column_names(const std::string& table) {
+    try {
+        TableSchema schema = getSchema(table);
+        return schema.column_names;
+    } catch (const std::runtime_error& e) {
+        return {}; // schema not found
+    }
+}
+
 TableSchema StorageEngine::getSchema(const std::string& table) {
-    // Hardcoded untuk testing
+    // Hardcoded schemas
     if (table == "Student") {
         TableSchema schema;
         schema.table_name = "Student";
@@ -351,57 +376,94 @@ TableSchema StorageEngine::getSchema(const std::string& table) {
         schema.primary_key = "CourseID";
         return schema;
     }
+
     throw std::runtime_error("Skema tidak ditemukan untuk tabel: " + table);
 }
 
 void StorageEngine::serialize_row(std::ostream& out, const Row& row, const TableSchema& schema) {
+    std::cout << "[DEBUG] SM serialize_row: Starting serialization for " << schema.column_names.size() << " columns" << std::endl;
     for (size_t i = 0; i < schema.column_names.size(); ++i) {
         const std::string& col_name = schema.column_names[i];
         DataType col_type = schema.column_types[i];
 
+        std::cout << "[DEBUG] SM serialize_row: Processing column[" << i << "] = " << col_name 
+                  << " (expected type: " << (col_type == DataType::INTEGER ? "INTEGER" : 
+                                              col_type == DataType::FLOAT ? "FLOAT" : "VARCHAR") << ")" << std::endl;
+
         if (!row.columns.count(col_name)) {
-            std::cerr << "SM: Kolom hilang saat serialisasi: " << col_name << std::endl;
+            std::cerr << "[DEBUG] SM: Kolom hilang saat serialisasi: " << col_name << std::endl;
             throw std::runtime_error("Kolom hilang saat serialisasi: " + col_name);
         }
 
         const std::any& value = row.columns.at(col_name);
+        
+        // Debug: Print actual type of value
+        if (value.type() == typeid(int)) {
+            std::cout << "[DEBUG] SM serialize_row: Value type is int, value = " << std::any_cast<int>(value) << std::endl;
+        } else if (value.type() == typeid(float)) {
+            std::cout << "[DEBUG] SM serialize_row: Value type is float, value = " << std::any_cast<float>(value) << std::endl;
+        } else if (value.type() == typeid(double)) {
+            std::cout << "[DEBUG] SM serialize_row: Value type is double, value = " << std::any_cast<double>(value) << std::endl;
+        } else if (value.type() == typeid(std::string)) {
+            std::cout << "[DEBUG] SM serialize_row: Value type is string, value = " << std::any_cast<std::string>(value) << std::endl;
+        } else {
+            std::cout << "[DEBUG] SM serialize_row: Value type is unknown: " << value.type().name() << std::endl;
+        }
 
         try {
             if (col_type == DataType::INTEGER) {
                 int32_t val = std::any_cast<int>(value);
+                std::cout << "[DEBUG] SM serialize_row: Successfully cast to int: " << val << std::endl;
                 out.write(reinterpret_cast<const char*>(&val), sizeof(val));
                 if (!out) {
-                    std::cerr << "SM: Error menulis INTEGER ke file." << std::endl;
+                    std::cerr << "[DEBUG] SM: Error menulis INTEGER ke file." << std::endl;
                     throw std::runtime_error("Gagal menulis INTEGER ke file");
                 }
             }
             else if (col_type == DataType::FLOAT) {
-                float val = std::any_cast<float>(value);
+                float val;
+                // Try to cast as float first, then double (common parser issue)
+                try {
+                    val = std::any_cast<float>(value);
+                } catch (const std::bad_any_cast&) {
+                    try {
+                        val = static_cast<float>(std::any_cast<double>(value));
+                        std::cout << "[DEBUG] SM serialize_row: Cast double to float: " << val << std::endl;
+                    } catch (const std::bad_any_cast&) {
+                        throw; // Re-throw if neither works
+                    }
+                }
+                std::cout << "[DEBUG] SM serialize_row: Successfully cast to float: " << val << std::endl;
                 out.write(reinterpret_cast<const char*>(&val), sizeof(val));
                 if (!out) {
-                    std::cerr << "SM: Error menulis FLOAT ke file." << std::endl;
+                    std::cerr << "[DEBUG] SM: Error menulis FLOAT ke file." << std::endl;
                     throw std::runtime_error("Gagal menulis FLOAT ke file");
                 }
             }
             else if (col_type == DataType::VARCHAR || col_type == DataType::CHAR) {
                 std::string str = std::any_cast<std::string>(value);
+                std::cout << "[DEBUG] SM serialize_row: Successfully cast to string: " << str << std::endl;
                 uint32_t len = static_cast<uint32_t>(str.length());
                 out.write(reinterpret_cast<const char*>(&len), sizeof(len));
                 if (!out) {
-                    std::cerr << "SM: Error menulis panjang string ke file." << std::endl;
+                    std::cerr << "[DEBUG] SM: Error menulis panjang string ke file." << std::endl;
                     throw std::runtime_error("Gagal menulis panjang string ke file");
                 }
                 out.write(str.c_str(), len);
                 if (!out) {
-                    std::cerr << "SM: Error menulis data string ke file." << std::endl;
+                    std::cerr << "[DEBUG] SM: Error menulis data string ke file." << std::endl;
                     throw std::runtime_error("Gagal menulis data string ke file");
                 }
             }
         } catch (const std::bad_any_cast& e) {
-            std::cerr << "SM: Tipe data tidak cocok untuk kolom " << col_name << ": " << e.what() << std::endl;
+            std::cerr << "[DEBUG] SM: Tipe data tidak cocok untuk kolom " << col_name << ": " << e.what() << std::endl;
+            std::cerr << "[DEBUG] SM: Expected type: " << (col_type == DataType::INTEGER ? "INTEGER" : 
+                                                           col_type == DataType::FLOAT ? "FLOAT" : "VARCHAR") << std::endl;
+            std::cerr << "[DEBUG] SM: Actual value type: " << value.type().name() << std::endl;
             throw std::runtime_error("Tipe data tidak cocok untuk kolom " + col_name);
         }
     }
+    std::cout << "[DEBUG] SM serialize_row: Serialization completed successfully" << std::endl;
 }
 
 Row StorageEngine::deserialize_row(std::istream& in, const TableSchema& schema) {
@@ -1109,5 +1171,64 @@ bool StorageEngine::any_to_string(const std::any &a, std::string &out) {
         if (a.type() == typeid(const char*)) { out = std::any_cast<const char*>(a); return true; }
     } catch (const std::bad_any_cast&) { return false; }
     return false;
+}
+
+bool StorageEngine::create_table(const TableSchema& schema) {
+    try {
+        // Check if table already exists (check data file)
+        std::string data_file = data_dir_ + "/" + schema.table_name + ".dat";
+        if (std::filesystem::exists(data_file)) {
+            std::cerr << "SM: Table " << schema.table_name << " already exists" << std::endl;
+            return false;
+        }
+
+        // Create data directory if it doesn't exist
+        std::filesystem::create_directories(data_dir_);
+
+        // Create empty data file
+        std::ofstream data_out(data_file, std::ios::binary);
+        if (!data_out.is_open()) {
+            std::cerr << "SM: Failed to create data file: " << data_file << std::endl;
+            return false;
+        }
+        data_out.close();
+
+        std::cout << "SM: Created table " << schema.table_name << std::endl;
+        return true;
+    } catch (const std::exception& e) {
+        std::cerr << "SM: Error creating table: " << e.what() << std::endl;
+        return false;
+    }
+}
+
+bool StorageEngine::drop_table(const std::string& table_name) {
+    try {
+        std::string data_file = data_dir_ + "/" + table_name + ".dat";
+        std::string index_file = data_dir_ + "/" + table_name + ".idx";
+
+        // Check if table exists
+        if (!std::filesystem::exists(data_file)) {
+            std::cerr << "SM: Table " << table_name << " does not exist" << std::endl;
+            return false;
+        }
+
+        // Remove data file
+        std::filesystem::remove(data_file);
+
+        // Remove index file if exists
+        if (std::filesystem::exists(index_file)) {
+            std::filesystem::remove(index_file);
+        }
+
+        // Remove from index maps
+        table_index.erase(table_name);
+        table_index_type.erase(table_name);
+
+        std::cout << "SM: Dropped table " << table_name << std::endl;
+        return true;
+    } catch (const std::exception& e) {
+        std::cerr << "SM: Error dropping table: " << e.what() << std::endl;
+        return false;
+    }
 }
 } // namespace mdbms::sm

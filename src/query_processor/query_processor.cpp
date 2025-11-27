@@ -109,9 +109,15 @@ ExecutionResult QueryProcessor::execute_query(const std::string& query) {
             result.message = "Deleted " + std::to_string(affected) + " rows";
             result.success = true;
         } else if (query_type == "CREATE") {
-            // Next milestone aja
+            bool success = execute_create_table(optimized_query, current_transaction_id);
+            result.success = success;
+            result.message = success ? "Table created successfully" : "Failed to create table";
+            result.affected_rows = 0;
         } else if (query_type == "DROP") {
-            // Next milestone aja
+            bool success = execute_drop_table(optimized_query, current_transaction_id);
+            result.success = success;
+            result.message = success ? "Table dropped successfully" : "Failed to drop table";
+            result.affected_rows = 0;
         } else {
             throw std::runtime_error("Unsupported query type: " + query_type);
         }
@@ -673,15 +679,45 @@ int QueryProcessor::execute_insert(const mdbms::qo::ParsedQuery& parsed_query, i
             ccm_manager->log_object(request, transaction_id);
         }
 
-        // Get table schema to map values to columns
-        DataRetrieval retrieval;
-        retrieval.table = table_name;
-        retrieval.columns = {"*"};
-        retrieval.search_type = SearchType::LINEAR;
-        Rows<Row> schema_info = sm_engine->read_block(retrieval);
+        // Get column names for mapping values
+        std::vector<std::string> column_names;
+        
+        // If INSERT specifies columns explicitly, use those
+        if (!parsed_query.insert_columns.empty()) {
+            std::cout << "[DEBUG] QP INSERT: Using explicit column list: ";
+            for (const auto& col : parsed_query.insert_columns) {
+                std::cout << col << " ";
+            }
+            std::cout << std::endl;
+            column_names = parsed_query.insert_columns;
+        } else {
+            // Get column names from schema (in correct order)
+            std::cout << "[DEBUG] QP INSERT: No explicit columns, getting column names from schema..." << std::endl;
+            column_names = sm_engine->get_column_names(table_name);
+            
+            if (column_names.empty()) {
+                std::cerr << "[DEBUG] QP INSERT ERROR: Cannot determine column names for table: " << table_name << std::endl;
+                std::cerr << "[DEBUG] QP INSERT ERROR: Table schema not found. Use CREATE TABLE first or specify columns in INSERT." << std::endl;
+                throw std::runtime_error("Cannot determine column names for table: " + table_name + 
+                                       ". Table schema not found. Use CREATE TABLE first or specify columns in INSERT statement.");
+            }
+            
+            std::cout << "[DEBUG] QP INSERT: Got " << column_names.size() << " columns from schema" << std::endl;
+        }
 
-        if (parsed_query.insert_values.size() != schema_info.column_names.size()) {
-             // Warning or error if size mismatch. For now, proceed with what we have.
+        std::cout << "[DEBUG] QP INSERT: Final column_names (" << column_names.size() << "): ";
+        for (const auto& col : column_names) {
+            std::cout << col << " ";
+        }
+        std::cout << std::endl;
+        std::cout << "[DEBUG] QP INSERT: insert_values.size() = " << parsed_query.insert_values.size() << std::endl;
+
+        // Validate value count matches column count
+        if (parsed_query.insert_values.size() != column_names.size()) {
+            throw std::runtime_error("Column count mismatch: expected " + 
+                                   std::to_string(column_names.size()) + 
+                                   " values, got " + 
+                                   std::to_string(parsed_query.insert_values.size()));
         }
 
         DataWrite<Row> single_insert;
@@ -689,14 +725,39 @@ int QueryProcessor::execute_insert(const mdbms::qo::ParsedQuery& parsed_query, i
         single_insert.is_insert = true;
         single_insert.new_value.table_name = table_name;
         
-        // Map values
-        for (size_t i = 0; i < parsed_query.insert_values.size(); ++i) {
-            if (i < schema_info.column_names.size()) {
-                std::string col_name = schema_info.column_names[i];
-                single_insert.new_value.columns[col_name] = parsed_query.insert_values[i];
-                single_insert.columns.push_back(col_name);
+        // Map values to columns
+        std::cout << "[DEBUG] QP INSERT: Mapping values to columns..." << std::endl;
+        for (size_t i = 0; i < parsed_query.insert_values.size() && i < column_names.size(); ++i) {
+            std::string col_name = column_names[i];
+            std::cout << "[DEBUG] QP INSERT: Mapping value[" << i << "] to column: " << col_name << std::endl;
+            single_insert.new_value.columns[col_name] = parsed_query.insert_values[i];
+            single_insert.columns.push_back(col_name);
+        }
+        
+        std::cout << "[DEBUG] QP INSERT: Row columns after mapping (" << single_insert.new_value.columns.size() << "): ";
+        // Print in schema order, not map iteration order
+        for (const auto& col_name : column_names) {
+            if (single_insert.new_value.columns.count(col_name)) {
+                std::cout << col_name << " ";
             }
         }
+        std::cout << std::endl;
+        std::cout << "[DEBUG] QP INSERT: Row column values: ";
+        for (const auto& col_name : column_names) {
+            if (single_insert.new_value.columns.count(col_name)) {
+                const auto& val = single_insert.new_value.columns.at(col_name);
+                if (val.type() == typeid(int)) {
+                    std::cout << col_name << "=" << std::any_cast<int>(val) << " ";
+                } else if (val.type() == typeid(float)) {
+                    std::cout << col_name << "=" << std::any_cast<float>(val) << " ";
+                } else if (val.type() == typeid(double)) {
+                    std::cout << col_name << "=" << std::any_cast<double>(val) << "(double) ";
+                } else if (val.type() == typeid(std::string)) {
+                    std::cout << col_name << "='" << std::any_cast<std::string>(val) << "' ";
+                }
+            }
+        }
+        std::cout << std::endl;
 
         int res = sm_engine->write_block(single_insert);
         if (res > 0) affected_rows = res;
@@ -718,7 +779,7 @@ int QueryProcessor::execute_insert(const mdbms::qo::ParsedQuery& parsed_query, i
             
             // Log inserted data for UNDO
             Rows<Row> inserted_data;
-            inserted_data.column_names = schema_info.column_names;
+            inserted_data.column_names = column_names;
             inserted_data.data.push_back(single_insert.new_value);
             inserted_data.rows_count = 1;
             log_result.data = inserted_data;
@@ -805,6 +866,145 @@ int QueryProcessor::execute_delete(const mdbms::qo::ParsedQuery& parsed_query, i
     }
 
     return affected_rows;
+}
+
+bool QueryProcessor::execute_create_table(const mdbms::qo::ParsedQuery& parsed_query, int transaction_id) {
+    try {
+        if (parsed_query.target_table.empty()) {
+            throw std::runtime_error("CREATE TABLE requires a table name");
+        }
+
+        if (parsed_query.column_definitions.empty()) {
+            throw std::runtime_error("CREATE TABLE requires at least one column");
+        }
+
+        std::string table_name = parsed_query.target_table;
+
+        if (ccm_manager) {
+            Row request;
+            request.table_name = table_name;
+            request.row_id = -1;
+            Response access = ccm_manager->validate_object(request, transaction_id, Action::WRITE);
+            if (!access.allowed) {
+                throw std::runtime_error("Concurrency control denied WRITE access for table " + table_name);
+            }
+            ccm_manager->log_object(request, transaction_id);
+        }
+
+        TableSchema schema;
+        schema.table_name = table_name;
+
+        auto convert_data_type = [](const std::string& type_str) -> DataType {
+            std::string upper_type = type_str;
+            std::transform(upper_type.begin(), upper_type.end(), upper_type.begin(), ::toupper);
+            
+            if (upper_type == "INT" || upper_type == "INTEGER") {
+                return DataType::INTEGER;
+            } else if (upper_type == "FLOAT" || upper_type == "REAL") {
+                return DataType::FLOAT;
+            } else if (upper_type == "CHAR") {
+                return DataType::CHAR;
+            } else if (upper_type == "VARCHAR") {
+                return DataType::VARCHAR;
+            } else {
+                throw std::runtime_error("Unsupported data type: " + type_str);
+            }
+        };
+
+        for (const auto& col_def : parsed_query.column_definitions) {
+            schema.column_names.push_back(col_def.name);
+            schema.column_types.push_back(convert_data_type(col_def.data_type));
+            schema.column_sizes.push_back(col_def.length);
+
+            if (col_def.is_primary_key) {
+                if (!schema.primary_key.empty()) {
+                    throw std::runtime_error("Multiple primary keys not supported");
+                }
+                schema.primary_key = col_def.name;
+            }
+
+            if (col_def.is_foreign_key && !col_def.references_table.empty()) {
+                std::string ref = col_def.references_table;
+                if (!col_def.references_column.empty()) {
+                    ref += "." + col_def.references_column;
+                }
+                schema.foreign_keys[col_def.name] = ref;
+            }
+        }
+
+        bool success = sm_engine->create_table(schema);
+
+        if (success) {
+            std::cout << "QP: Created table " << table_name << std::endl;
+
+            if (frm_manager) {
+                ExecutionResult log_result;
+                log_result.transaction_id = transaction_id;
+                log_result.timestamp = std::time(nullptr);
+                if (!parsed_query.original_query.empty()) {
+                    log_result.query = parsed_query.original_query;
+                } else {
+                    log_result.query = "CREATE TABLE " + table_name;
+                }
+                log_result.success = true;
+                log_result.affected_rows = 0;
+                frm_manager->write_log(log_result);
+            }
+        }
+
+        return success;
+
+    } catch (const std::exception& e) {
+        std::cerr << "QP CREATE TABLE error: " << e.what() << std::endl;
+        throw;
+    }
+}
+
+bool QueryProcessor::execute_drop_table(const mdbms::qo::ParsedQuery& parsed_query, int transaction_id) {
+    try {
+        if (parsed_query.target_table.empty()) {
+            throw std::runtime_error("DROP TABLE requires a table name");
+        }
+
+        std::string table_name = parsed_query.target_table;
+
+        if (ccm_manager) {
+            Row request;
+            request.table_name = table_name;
+            request.row_id = -1;
+            Response access = ccm_manager->validate_object(request, transaction_id, Action::WRITE);
+            if (!access.allowed) {
+                throw std::runtime_error("Concurrency control denied WRITE access for table " + table_name);
+            }
+            ccm_manager->log_object(request, transaction_id);
+        }
+
+        bool success = sm_engine->drop_table(table_name);
+
+        if (success) {
+            std::cout << "QP: Dropped table " << table_name << std::endl;
+
+            if (frm_manager) {
+                ExecutionResult log_result;
+                log_result.transaction_id = transaction_id;
+                log_result.timestamp = std::time(nullptr);
+                if (!parsed_query.original_query.empty()) {
+                    log_result.query = parsed_query.original_query;
+                } else {
+                    log_result.query = "DROP TABLE " + table_name;
+                }
+                log_result.success = true;
+                log_result.affected_rows = 0;
+                frm_manager->write_log(log_result);
+            }
+        }
+
+        return success;
+
+    } catch (const std::exception& e) {
+        std::cerr << "QP DROP TABLE error: " << e.what() << std::endl;
+        throw;
+    }
 }
 
 int QueryProcessor::begin_transaction() {
