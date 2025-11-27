@@ -4,11 +4,11 @@
 #include "storage_manager.h"
 #include "query_optimizer.h"
 #include "query_processor.h"
+#include "tui.h"
 
 int main() {
-    // Use singleton instances
-    mdbms::qp::QueryProcessor query_processor();
-
-    std::cout << "Main: Query Processor and Optimization Engine initialized." << std::endl;
+    mdbms::tui::TUI tui;
+    tui.run();
+    
     return 0;
 }

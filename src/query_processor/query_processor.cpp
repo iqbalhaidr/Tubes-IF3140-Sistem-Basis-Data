@@ -49,8 +49,9 @@ ExecutionResult QueryProcessor::execute_query(const std::string& query) {
     result.affected_rows = 0;
 
     try {
-        // Get query type
-        std::string query_type = parse_query_type(query);
+        // Parse query first to get query type from query optimizer
+        mdbms::qo::ParsedQuery parsed_query = qo_engine->parse_query(query);
+        std::string query_type = parsed_query.query_type;
         std::cout << "Query type: " << query_type << std::endl;
 
         // Handle Transaction 
@@ -82,8 +83,7 @@ ExecutionResult QueryProcessor::execute_query(const std::string& query) {
         }
         result.transaction_id = current_transaction_id;
 
-        // Parse and optimize query
-        mdbms::qo::ParsedQuery parsed_query = qo_engine->parse_query(query);
+        // Optimize query
         mdbms::qo::ParsedQuery optimized_query = qo_engine->optimize_query(parsed_query);
 
         // Execute based on query type
