@@ -698,7 +698,7 @@ void test_update_and_undo_with_storage() {
 }
 
 void test_system_crash_recovery() {
-    std::cout << BOLD << "\n=== TEST: SYSTEM CRASH RECOVERY (ARIES SIMULATION) ===" << RESET << std::endl;
+    std::cout << BOLD << "\n=== TEST: SYSTEM CRASH RECOVERY ===" << RESET << std::endl;
     
     clean_environment(); // Hapus log lama
     
@@ -753,7 +753,6 @@ void test_system_crash_recovery() {
     mdbms_::ExecutionResult r1_com; r1_com.transaction_id = 100; r1_com.query = "COMMIT"; r1_com.success=true;
     frm.write_log(r1_com);
 
-
     // 2. Transaksi Gagal/Crash (TX 666) - Harusnya HILANG (Di-Undo)
     mdbms_::Row rowDirty;
     rowDirty.table_name = "Student";
@@ -774,15 +773,41 @@ void test_system_crash_recovery() {
     r2_ins.data.data.push_back(rowDirty);
     frm.write_log(r2_ins);
 
+    // CHECKPOINT - Catat TX 666 sebagai active transaction
     frm.save_checkpoint(); 
+    
+    std::cout << "[Phase 1.5] Checkpoint saved. Now adding committed transaction AFTER checkpoint..." << std::endl;
 
-    std::cout << "[Phase 1] Data written. TX 100 Committed. TX 666 Uncommitted. 'Crashing' now..." << std::endl;
+    // 3. Transaksi Committed SETELAH Checkpoint (TX 888) - Harusnya DI-REDO
+    mdbms_::Row rowAfterCheckpoint;
+    rowAfterCheckpoint.table_name = "Student";
+    rowAfterCheckpoint.columns["StudentID"] = 888;
+    rowAfterCheckpoint.columns["FullName"] = std::string("After Checkpoint");
+    rowAfterCheckpoint.columns["GPA"] = 3.5f;
+
+    // Log: BEGIN -> INSERT -> COMMIT (semua SETELAH checkpoint)
+    mdbms_::ExecutionResult r3_begin; r3_begin.transaction_id = 888; r3_begin.query = "BEGIN"; r3_begin.success=true;
+    frm.write_log(r3_begin);
+
+    mdbms_::ExecutionResult r3_ins; r3_ins.transaction_id = 888; r3_ins.query = "INSERT INTO Student ..."; r3_ins.success=true;
+    r3_ins.data.data.push_back(rowAfterCheckpoint);
+    frm.write_log(r3_ins);
+
+    mdbms_::ExecutionResult r3_com; r3_com.transaction_id = 888; r3_com.query = "COMMIT"; r3_com.success=true;
+    frm.write_log(r3_com);
+
+    // CRITICAL: Flush log buffer to ensure all logs are on disk before crash simulation
+    std::cout << "[Phase 1.8] Flushing logs to disk before crash..." << std::endl;
+    frm.flush_logs_for_testing();
+    
+    std::cout << "[Phase 1] Data written. TX 100 Committed (before CP). TX 666 Uncommitted. TX 888 Committed (after CP). 'Crashing' now..." << std::endl;
 
     frm.debug_run_crash_recovery();
 
     // --- FASE 3: VERIFIKASI DATA ---
     std::cout << "[Phase 3] Verifying Data Consistency..." << std::endl;
 
+    // Verify TX 100 (Committed before checkpoint) - should exist
     mdbms_::DataRetrieval getSafe;
     getSafe.table = "Student";
     getSafe.columns = {"*"};
@@ -791,12 +816,13 @@ void test_system_crash_recovery() {
     
     auto resultSafe = storage.read_block(getSafe);
     if (resultSafe.data.size() == 1) {
-        std::cout << "   [OK] Data Committed (ID 100) Still Exists." << std::endl;
+        std::cout << "   [OK] TX 100 (Committed before checkpoint): Data exists." << std::endl;
     } else {
-        std::cout << RED << "   [FAIL] Data Committed (ID 100) Lost!" << RESET << std::endl;
+        std::cout << RED << "   [FAIL] TX 100 data lost!" << RESET << std::endl;
         assert(false);
     }
 
+    // Verify TX 666 (Uncommitted) - should NOT exist (UNDO worked)
     mdbms_::DataRetrieval getDirty;
     getDirty.table = "Student";
     getDirty.columns = {"*"};
@@ -805,11 +831,28 @@ void test_system_crash_recovery() {
 
     auto resultDirty = storage.read_block(getDirty);
     if (resultDirty.data.size() == 0) {
-        std::cout << GREEN << "PASS: System Failure Recovery berhasil! Data uncommitted (ID 666) dihapus." << RESET << std::endl;
+        std::cout << "   [OK] TX 666 (Uncommitted): Data rolled back." << std::endl;
     } else {
-        std::cout << RED << "FAIL: System Failure Recovery Gagal! Data uncommitted (ID 666) masih ada di disk." << RESET << std::endl;
+        std::cout << RED << "   [FAIL] TX 666 uncommitted data still exists!" << RESET << std::endl;
         assert(false);
     }
+
+    // Verify TX 888 (Committed after checkpoint) - should exist (REDO worked)
+    mdbms_::DataRetrieval getAfterCP;
+    getAfterCP.table = "Student";
+    getAfterCP.columns = {"*"};
+    mdbms_::Condition condAfterCP; condAfterCP.column = "StudentID"; condAfterCP.operation = "="; condAfterCP.operand = 888;
+    getAfterCP.conditions.push_back(condAfterCP);
+
+    auto resultAfterCP = storage.read_block(getAfterCP);
+    if (resultAfterCP.data.size() == 1) {
+        std::cout << GREEN << "   [OK] TX 888 (Committed after checkpoint): Data exists (REDO successful)." << RESET << std::endl;
+    } else {
+        std::cout << RED << "   [FAIL] TX 888 committed data lost - REDO phase not working!" << RESET << std::endl;
+        assert(false);
+    }
+
+    std::cout << GREEN << "PASS: System Crash Recovery with REDO phase successful!" << RESET << std::endl;
 }
 
 int main() {

@@ -24,6 +24,7 @@ public:
     std::vector<LogEntry> read_all_logs_public(const std::string& file_path);
     void debug_run_crash_recovery();
     void reset_state_for_testing();
+    void flush_logs_for_testing() { flush_buffer(); }
 
 private:
     FailureRecoveryManager();

@@ -815,6 +815,13 @@ void FailureRecoveryManager::recover_from_crash() {
         else if (entry.operation == Operation::COMMIT || entry.operation == Operation::ABORT) {
             undo_list.erase(entry.transaction_id);
         }
+
+        if (entry.operation == Operation::INSERT || 
+            entry.operation == Operation::UPDATE || 
+            entry.operation == Operation::DELETE) {
+        
+            redo_operation(entry);
+        }
     }
     
     std::cout << "FRM: Ditemukan " << undo_list.size() << " transaksi uncommitted yang perlu di-UNDO." << std::endl;
