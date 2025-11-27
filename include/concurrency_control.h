@@ -3,6 +3,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <unordered_map>
 #include "types.h"
 
 namespace mdbms::ccm {
@@ -54,6 +55,35 @@ private:
     std::map<size_t, ObjectTimestamp> object_timestamps_;
     int current_timestamp_;
     std::mutex mutex_;
+};
+
+// MVCC: Multi-Version Concurrency Control
+struct ObjectVersion {
+    int version;
+    int write_ts;
+    int read_ts;
+    Row data;
+};
+
+class MVCCManager : public CCManager {
+public:
+    MVCCManager();
+    ~MVCCManager() override;
+
+    int begin_transaction() override;
+    void log_object(const Row& object, int transaction_id) override;
+    Response validate_object(const Row& object, int transaction_id, Action action) override;
+    void end_transaction(int transaction_id) override;
+    void abort_transaction(int transaction_id);
+
+private:
+    std::unordered_map<size_t, std::vector<ObjectVersion>> object_versions_;
+    std::unordered_map<int, std::shared_ptr<Transaction>> transactions_;
+    int current_timestamp_;
+    std::mutex mutex_;
+    std::unordered_map<int, std::vector<int>> read_dependency_;
+
+    ObjectVersion* find_latest_version(size_t row_hash, int trans_ts);
 };
 
 // Kelas wrapper yang mengelola protokol concurrency control aktif (Singleton)
