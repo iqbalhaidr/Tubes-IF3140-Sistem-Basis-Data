@@ -58,6 +58,7 @@ int main() {
     student_schema.column_types = {DataType::INTEGER, DataType::VARCHAR, DataType::FLOAT};
     student_schema.column_sizes = {0, 50, 0};
     student_schema.primary_key = "StudentID";
+    student_schema.foreign_keys = {};
     sm.create_table(student_schema);
 
     TableSchema course_schema;
@@ -66,6 +67,7 @@ int main() {
     course_schema.column_types = {DataType::INTEGER, DataType::INTEGER, DataType::VARCHAR};
     course_schema.column_sizes = {0, 0, 50};
     course_schema.primary_key = "CourseID";
+    student_schema.foreign_keys = {};
     sm.create_table(course_schema);
 
     std::cout << "Test 0 OK.\n";
@@ -416,6 +418,8 @@ int main() {
 
     // TEST 17: DROP Table
     std::cout << "\n--- TEST 17: DROP TABLE ---\n";
+    std::cout << "\nDropping student table\n";
+    std::cout << "Can't get student schema error is expected:\n\n";
     sm.delete_table(student_schema);
 
     rows_all = sm.read_block(read_all);
@@ -424,8 +428,55 @@ int main() {
 
     std::cout << "Test 17 OK (table dropped).\n";
 
+    // TEST 18: get_tables()
+    std::cout << "\n--- TEST 18: GET tables ---\n";
+    std::vector<mdbms::TableSchema> schemas = sm.get_tables();
+    std::cout << "Tables:" << std::endl;
+    for (auto& schema_i : schemas) {
+        std::cout << "  " << schema_i.table_name << std::endl;
+        std::cout << "  columns:" << std::endl;
+        for (int i = 0; i < schema_i.column_names.size(); i++) {
+            std::cout << "    ";
+            std::cout << schema_i.column_names[i] << " ";
+            std::cout << static_cast<int>(schema_i.column_types[i]) << " ";
+            std::cout << schema_i.column_sizes[i] << " ";
+            std::cout << schema_i.column_names[i] << " ";
+            std::cout <<  std::endl;
+        }
+        std::cout << "  primary key: " << schema_i.primary_key << std::endl;
+        std::cout << "  foreign key: " << std::endl;
+        for (auto& foreign_key : schema_i.foreign_keys) {
+            std::cout << "    ";
+            std::cout << foreign_key.first << " ";
+            std::cout << foreign_key.second << " ";
+            std::cout << std::endl;
+        }
+
+        std::cout <<  std::endl;
+    }
+
+    std::cout << "Test 18 OK . (maap perlu cek manual si)\n";
+
+    // TEST 19: get_stats()
+    std::cout << "\n--- TEST 19: GET STATS ---\n";
+    std::map<std::string, mdbms::Statistic> stats = sm.get_stats();
+    for (auto& stats_col : stats) {
+        std::cout << stats_col.first << std::endl;
+        std::cout << "n_r: " << stats_col.second.n_r << std::endl;
+        std::cout << "b_r: " << stats_col.second.b_r << std::endl;
+        std::cout << "l_r: " << stats_col.second.l_r << std::endl;
+        std::cout << "f_r: " << stats_col.second.f_r << std::endl;
+        std::cout << "V_a_r: " <<  std::endl;
+
+        for (auto& col_V_a_r : stats_col.second.V_a_r) {
+            std::cout << "  " << col_V_a_r.first << ": " << col_V_a_r.second <<  std::endl;
+        }
+        std::cout << std::endl;
+    }
+
+    std::cout << "Test 19 OK . (maap perlu cek manual si)\n";
+
     std::cout << "\n===== SEMUA TEST LULUS =====\n";
     return 0;
-
     
 }
