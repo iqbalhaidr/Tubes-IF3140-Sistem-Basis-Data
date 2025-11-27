@@ -370,6 +370,7 @@ TableSchema StorageEngine::get_table_schema(const std::string& table) {
     std::ifstream infile(schema_filename, std::ios::binary);
 
     TableSchema result;
+    result.table_name = table;
 
     if (!infile.is_open()) {
         std::cerr << "SM: Gagal membuka file schema" << std::endl;
@@ -423,7 +424,6 @@ TableSchema StorageEngine::get_table_schema(const std::string& table) {
         std::cerr << "SM: Error membaca panjang nama primary key pada file schema " << table << std::endl;
         throw std::runtime_error("File skema korup untuk tabel: " + table);
     }
-
     std::string primary_key(primary_key_len, '\0');
     infile.read(&primary_key[0], primary_key_len);
     if (infile.gcount() != static_cast<std::streamsize>(primary_key_len) || !infile) {
@@ -432,13 +432,52 @@ TableSchema StorageEngine::get_table_schema(const std::string& table) {
     }
     result.primary_key = primary_key;
 
+    std::map<std::string, std::string> foreign_keys = {};
+    uint32_t foreign_keys_len;
+    infile.read(reinterpret_cast<char*>(&foreign_keys_len), sizeof(foreign_keys_len));
+    if (infile.gcount() != sizeof(foreign_keys_len) || !infile) {
+        std::cerr << "SM: Error membaca banyak foreign key pada file schema " << table << std::endl;
+        throw std::runtime_error("File skema korup untuk tabel: " + table);
+    }
+    for (uint32_t i = 0; i < foreign_keys_len; i++) {
+        uint32_t foreign_keys_name_len;
+        infile.read(reinterpret_cast<char*>(&foreign_keys_name_len), sizeof(foreign_keys_name_len));
+        if (infile.gcount() != sizeof(foreign_keys_name_len) || !infile) {
+            std::cerr << "SM: Error membaca panjang nama foreign key pada file schema " << table << std::endl;
+            throw std::runtime_error("File skema korup untuk tabel: " + table);
+        }
+
+        std::string foreign_keys_name(foreign_keys_name_len, '\0');
+        infile.read(&foreign_keys_name[0], foreign_keys_name_len);
+        if (infile.gcount() != static_cast<std::streamsize>(foreign_keys_name_len) || !infile) {
+            std::cerr << "SM: Error membaca nama foreign key pada file schema " << table << std::endl;
+            throw std::runtime_error("File skema korup untuk tabel: " + table);
+        }
+
+        uint32_t references_name_len;
+        infile.read(reinterpret_cast<char*>(&references_name_len), sizeof(references_name_len));
+        if (infile.gcount() != sizeof(references_name_len) || !infile) {
+            std::cerr << "SM: Error membaca panjang nama kolom reference dari foreign key pada file schema " << table << std::endl;
+            throw std::runtime_error("File skema korup untuk tabel: " + table);
+        }
+        
+        std::string references_name(references_name_len, '\0');
+        infile.read(&references_name[0], references_name_len);
+        if (infile.gcount() != static_cast<std::streamsize>(references_name_len) || !infile) {
+            std::cerr << "SM: Error membaca nama kolom reference dari foreign key pada file schema " << table << std::endl;
+            throw std::runtime_error("File skema korup untuk tabel: " + table);
+        }
+        foreign_keys.insert({foreign_keys_name, references_name});
+    }
+    result.foreign_keys = foreign_keys;
+
     infile.close();
     return result;
 }
 
 bool StorageEngine::create_table(const TableSchema& schema) {
     std::string schema_filename = data_dir_ + "/" + schema.table_name + ".schema";
-    std::ofstream outfile(schema_filename, std::ios::binary);
+    std::ofstream outfile(schema_filename, std::ios::binary | std::ios::app);
     if (!outfile.is_open()) {
         std::cerr << "SM: Gagal membuka file schema untuk tabel: " << schema.table_name << std::endl;
         throw std::runtime_error("Gagal membuka file schema");
@@ -491,6 +530,38 @@ bool StorageEngine::create_table(const TableSchema& schema) {
         std::cerr << "SM: Error menulis nama primary key ke file." << std::endl;
         throw std::runtime_error("Gagal menulis nama primary key ke file");
     }
+
+    uint32_t foreign_keys_len = static_cast<uint32_t>(schema.foreign_keys.size());
+    outfile.write(reinterpret_cast<const char*>(&foreign_keys_len), sizeof(foreign_keys_len));
+    if (!outfile) {
+        std::cerr << "SM: Error menulis banyak foreign key ke file." << std::endl;
+        throw std::runtime_error("Gagal menulis banyak foreign key ke file");
+    }
+    for (auto& foreign_key : schema.foreign_keys) {
+        uint32_t foreign_key_name_len = static_cast<uint32_t>(foreign_key.first.length());
+        outfile.write(reinterpret_cast<const char*>(&foreign_key_name_len), sizeof(foreign_key_name_len));
+        if (!outfile) {
+            std::cerr << "SM: Error menulis panjang nama foreign key ke file." << std::endl;
+            throw std::runtime_error("Gagal menulis panjang nama foreign key ke file");
+        }
+        outfile.write(foreign_key.first.c_str(), foreign_key_name_len);
+        if (!outfile) {
+            std::cerr << "SM: Error menulis nama foreign key ke file." << std::endl;
+            throw std::runtime_error("Gagal menulis nama foreign key ke file");
+        }
+        uint32_t reference_name_len = static_cast<uint32_t>(foreign_key.second.length());
+        outfile.write(reinterpret_cast<const char*>(&reference_name_len), sizeof(reference_name_len));
+        if (!outfile) {
+            std::cerr << "SM: Error menulis panjang nama reference dari foreign key ke file." << std::endl;
+            throw std::runtime_error("Gagal menulis panjang nama reference dari foreign key ke file");
+        }
+        outfile.write(foreign_key.second.c_str(), reference_name_len);
+        if (!outfile) {
+            std::cerr << "SM: Error menulis nama reference dari foreign key ke file." << std::endl;
+            throw std::runtime_error("Gagal menulis nama reference dari foreign key ke file");
+        }
+    }
+   
     outfile.close();
     return true;
 }
@@ -705,6 +776,9 @@ bool StorageEngine::delete_table(const TableSchema& schema) {
         std::perror("SM: Error deleting data file when deleting old tables.meta");
         throw std::runtime_error("SM: Error deleting data file when deleting old tables.meta");
     }
+
+    // delete index file
+    // eh ngawur cuks masih aneh hash index
     std::rename(tables_out_filename.c_str(), tables_in_filename.c_str());
     return result;
 }
@@ -718,6 +792,35 @@ std::map<std::string, Statistic> StorageEngine::get_stats() {
     for (const TableSchema& table : tables) {
         Statistic stats;
         std::string filename = data_dir_ + "/" + table.table_name + ".dat";
+
+        // edge case, empty 
+        if (!std::filesystem::exists(filename)) {
+            int tuple_size = 0;
+            for (int i = 0; i < table.column_types.size(); i++) {
+                if (table.column_types[i] == DataType::INTEGER) tuple_size += sizeof(int32_t);
+                else if (table.column_types[i] == DataType::FLOAT) tuple_size += sizeof(float);
+                else if (table.column_types[i] == DataType::VARCHAR || table.column_types[i] == DataType::CHAR) {
+                    tuple_size += sizeof(uint32_t);
+
+                    // jujur bingung emg kalo CHAR, panjangnya bisa lebih dari 1 kah? 
+                    // tapi di TableSchema katanya column_sizes buat varchar DAN char, so for now gini dulu
+                    tuple_size += sizeof(char) * table.column_sizes[i]; 
+                }
+            }
+            stats.n_r = 0;
+            stats.b_r = 0;
+            stats.l_r = tuple_size;
+            stats.f_r = BLOCK_SIZE / tuple_size;
+            std::map<std::string, int> distinct_values; 
+            for (int i = 0; i < table.column_names.size(); i++) {
+                distinct_values.insert({table.column_names[i], 0});
+            }
+            stats.V_a_r = distinct_values;
+
+            result.insert({table.table_name, stats});
+            continue;
+        }
+
         std::ifstream file(filename, std::ios::binary);
         if (!file.is_open()) {
             std::cerr << "SM: Gagal membuka file: " << filename << std::endl;
@@ -725,7 +828,6 @@ std::map<std::string, Statistic> StorageEngine::get_stats() {
         }
 
         int file_size = std::filesystem::file_size(filename);
-        stats.n_r = table.column_names.size();
         stats.b_r = (file_size / BLOCK_SIZE) + 1; // should be always positive so its fine to truncate toward zero
 
         int tuple_size = 0;
@@ -746,6 +848,7 @@ std::map<std::string, Statistic> StorageEngine::get_stats() {
         std::map<std::string, int> distinct_values; 
         std::unordered_map<std::string, std::unordered_set<std::string>> distinct_values_count;
 
+        int tuple_amount = 0;
         while (file.peek() != EOF) {
             Row row = deserialize_row(file, table);
             if (row.columns.empty()) {
@@ -766,6 +869,7 @@ std::map<std::string, Statistic> StorageEngine::get_stats() {
                     }
                 }
             }
+            tuple_amount += 1;
         }
         
         for (auto& distinct_val : distinct_values_count) {
@@ -774,10 +878,12 @@ std::map<std::string, Statistic> StorageEngine::get_stats() {
             }
         }
         stats.V_a_r = distinct_values;
-
+        stats.n_r = tuple_amount;
         result.insert({table.table_name, stats});
         file.close();
     }
+
+    
 
     return result;
 }
