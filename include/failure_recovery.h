@@ -6,6 +6,7 @@
 #include <mutex>
 #include <set>
 #include "types.h"
+#include "storage_manager.h"
 
 namespace mdbms::fr {
 
@@ -34,9 +35,14 @@ private:
     std::mutex mtx;
     int next_log_id;
     int next_checkpoint_id;
+    sm::StorageEngine& storage_engine_;
     
     // Helper convert struct Operation
     std::string operation_to_string(Operation op);
+    
+    // Helper untuk storage manager integration
+    std::vector<Condition> row_to_conditions(const Row& row, const std::string& table_name);
+    std::any string_to_any(const std::string& str);
     
     // ========================================================= BINARY LOG ========================================================================
 

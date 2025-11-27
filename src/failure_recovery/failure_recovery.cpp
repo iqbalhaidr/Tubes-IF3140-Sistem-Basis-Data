@@ -50,7 +50,8 @@ FailureRecoveryManager& FailureRecoveryManager::get_instance() {
     return instance;
 }
 
-FailureRecoveryManager::FailureRecoveryManager() {
+FailureRecoveryManager::FailureRecoveryManager() 
+    : storage_engine_(sm::StorageEngine::get_instance()) {
     this->next_log_id = 1;
     this->next_checkpoint_id = 1;
     // path untuk menyimpan log file
@@ -549,46 +550,134 @@ void FailureRecoveryManager::write_log_to_text_file(std::ofstream& out, const Lo
 
 // ===============================================================================================================================================
 
+std::vector<Condition> FailureRecoveryManager::row_to_conditions(const Row& row, const std::string& table_name) {
+    std::vector<Condition> conditions;
+    
+    // Use primary key columns to identify the row
+    // Common primary key column names
+    std::vector<std::string> pk_columns = {"StudentID", "CourseID", "id"};
+    
+    for (const auto& pk_col : pk_columns) {
+        if (row.columns.find(pk_col) != row.columns.end()) {
+            Condition cond;
+            cond.column = pk_col;
+            cond.operation = "=";
+            cond.operand = row.columns.at(pk_col);
+            conditions.push_back(cond);
+            std::cout << "FRM: Using '" << pk_col << "' as identifying condition" << std::endl;
+            break; // Only need one primary key
+        }
+    }
+    
+    return conditions;
+}
+
+std::any FailureRecoveryManager::string_to_any(const std::string& str) {
+    // Try to infer type from string
+    if (str.empty()) return str;
+    
+    // Try integer
+    try {
+        size_t pos;
+        int int_val = std::stoi(str, &pos);
+        if (pos == str.length()) {
+            return int_val;
+        }
+    } catch (...) {}
+    
+    // Try float
+    try {
+        size_t pos;
+        float float_val = std::stof(str, &pos);
+        if (pos == str.length()) {
+            return float_val;
+        }
+    } catch (...) {}
+    
+    // Default to string
+    return str;
+}
+
 bool FailureRecoveryManager::undo_operation(const LogEntry& entry) {
-    // Untuk saat ini, belum diintegrate dengan query processor dan storage manager
-    // Jadi undo hanya disimulate dengan melakukan logging doang (bukan beneran undo karena perlu integrate dengan storage manager )
     std::cout << "FRM: Melakukan UNDO untuk operasi " << operation_to_string(entry.operation) << std::endl;
     
-    switch (entry.operation) {
-        case Operation::INSERT: {
-            // UNDO INSERT -> DELETE row yang baru diinsert (menggunakan new_value)
-            std::cout << "FRM: UNDO INSERT - Menghapus row dengan ID " << entry.new_value.row_id 
-                      << " dari tabel " << entry.table_name << std::endl;
+    try {
+        switch (entry.operation) {
+            case Operation::INSERT: {
+                // UNDO INSERT -> DELETE row yang baru diinsert (menggunakan new_value)
+                std::cout << "FRM: UNDO INSERT - Menghapus row dengan ID " << entry.new_value.row_id 
+                          << " dari tabel " << entry.table_name << std::endl;
+                
+                // Create conditions to identify the row to delete
+                std::vector<Condition> conditions = row_to_conditions(entry.new_value, entry.table_name);
+                
+                if (conditions.empty()) {
+                    std::cerr << "FRM Error: Tidak bisa membuat kondisi untuk DELETE" << std::endl;
+                    return false;
+                }
+                
+                // Create DataDeletion and call storage manager
+                DataDeletion deletion;
+                deletion.table = entry.table_name;
+                deletion.conditions = conditions;
+                
+                int deleted = storage_engine_.delete_block(deletion);
+                std::cout << "FRM: Berhasil menghapus " << deleted << " row" << std::endl;
+                
+                return deleted > 0;
+            }
             
-            // TODO: Seharusnya panggil storage manager untuk menghapus row
+            case Operation::DELETE: {
+                // UNDO DELETE -> INSERT kembali row yang dihapus (menggunakan old_value)
+                std::cout << "FRM: UNDO DELETE - Mengembalikan row dengan ID " << entry.old_value.row_id 
+                          << " ke tabel " << entry.table_name << std::endl;
+                
+                // Create DataWrite for INSERT and call storage manager
+                DataWrite<Row> write;
+                write.table = entry.table_name;
+                write.new_value = entry.old_value;
+                write.is_insert = true;
+                
+                int inserted = storage_engine_.write_block(write);
+                std::cout << "FRM: Berhasil mengembalikan " << inserted << " row" << std::endl;
+                
+                return inserted > 0;
+            }
             
-            return true;
+            case Operation::UPDATE: {
+                // UNDO UPDATE -> UPDATE kembali ke nilai lama (old_value)
+                std::cout << "FRM: UNDO UPDATE - Mengembalikan row dengan ID " << entry.old_value.row_id 
+                          << " ke nilai lama pada tabel " << entry.table_name << std::endl;
+                
+                // Create conditions to identify the row to update
+                std::vector<Condition> conditions = row_to_conditions(entry.new_value, entry.table_name);
+                
+                if (conditions.empty()) {
+                    std::cerr << "FRM Error: Tidak bisa membuat kondisi untuk UPDATE" << std::endl;
+                    return false;
+                }
+                
+                // Create DataWrite for UPDATE and call storage manager
+                DataWrite<Row> write;
+                write.table = entry.table_name;
+                write.new_value = entry.old_value;
+                write.conditions = conditions;
+                write.is_insert = false;
+                
+                int updated = storage_engine_.write_block(write);
+                std::cout << "FRM: Berhasil mengembalikan " << updated << " row ke nilai lama" << std::endl;
+                
+                return updated > 0;
+            }
+            
+            default:
+                std::cerr << "FRM Error: Operasi " << operation_to_string(entry.operation) 
+                          << " tidak dapat di-UNDO" << std::endl;
+                return false;
         }
-        
-        case Operation::DELETE: {
-            // UNDO DELETE -> INSERT kembali row yang dihapus (menggunakan old_value)
-            std::cout << "FRM: UNDO DELETE - Mengembalikan row dengan ID " << entry.old_value.row_id 
-                      << " ke tabel " << entry.table_name << std::endl;
-            
-            // TODO: Seharusnya panggil storage manager untuk insert row
-
-            return true;
-        }
-        
-        case Operation::UPDATE: {
-            // UNDO UPDATE -> UPDATE kembali ke nilai lama (old_value)
-            std::cout << "FRM: UNDO UPDATE - Mengembalikan row dengan ID " << entry.old_value.row_id 
-                      << " ke nilai lama pada tabel " << entry.table_name << std::endl;
-            
-            // TODO: Seharusnya panggil storage manager untuk update row
-
-            return true;
-        }
-        
-        default:
-            std::cerr << "FRM Error: Operasi " << operation_to_string(entry.operation) 
-                      << " tidak dapat di-UNDO" << std::endl;
-            return false;
+    } catch (const std::exception& e) {
+        std::cerr << "FRM Error: Exception during UNDO - " << e.what() << std::endl;
+        return false;
     }
 }
 
