@@ -1,9 +1,10 @@
-#include "failure_recovery.h"
 #include <iostream>
 #include <fstream>
 #include <algorithm>
 #include <cctype>
 #include <sstream>
+#include <filesystem>
+#include "failure_recovery.h"
 
 namespace mdbms::fr {
 
@@ -58,12 +59,19 @@ FailureRecoveryManager::FailureRecoveryManager()
     this->log_file_path = "../data/wal.bin";
     std::cout << "FRM: Konstruktor FailureRecoveryManager dipanggil..." << std::endl;
     std::cout << "FRM: Log file path: " << this->log_file_path << std::endl;
+
+    recover_from_crash();
+
+    std::vector<LogEntry> existing = read_all_logs(this->log_file_path);
+    if (!existing.empty()) {
+        this->next_log_id = existing.back().log_id + 1;
+    }
 }
 
 FailureRecoveryManager::~FailureRecoveryManager() {
-    std::cout << "FRM: Destruktor FailureRecoveryManager dipanggil (stub)..." << std::endl;
+    std::cout << "FRM: Destruktor FailureRecoveryManager dipanggil..." << std::endl;
     save_checkpoint();
-    std::cout << "FRM: Checkpoint terakhir disimpan sebelum keluar (stub)..." << std::endl;
+    std::cout << "FRM: Checkpoint terakhir disimpan sebelum keluar..." << std::endl;
 }
 
 void FailureRecoveryManager::write_log(const ExecutionResult& info) {
@@ -72,7 +80,7 @@ void FailureRecoveryManager::write_log(const ExecutionResult& info) {
         return;
     }
 
-    std::cout << "FRM: Menulis log untuk query: " << info.query << " (stub)..." << std::endl;
+    std::cout << "FRM: Menulis log untuk query: " << info.query << "..." << std::endl;
     std::lock_guard<std::mutex> lock(this->mtx);
 
     // 1. Inisialisasi LogEntry dan tentukan tipe operasi
@@ -116,11 +124,9 @@ void FailureRecoveryManager::write_log(const ExecutionResult& info) {
         }
     } else if (entry.operation == Operation::BEGIN) {
         this->active_transactions_cache.insert(entry.transaction_id);
-        // Debug
         std::cout << "FRM: Transaksi " << entry.transaction_id << " dimulai." << std::endl;
     } else if (entry.operation == Operation::COMMIT || entry.operation == Operation::ABORT) {
         this->active_transactions_cache.erase(entry.transaction_id);
-        // Debug
         std::cout << "FRM: Transaksi " << entry.transaction_id << " selesai." << std::endl;
     } else {
         // SELECT (Commit non-data): kosongkan field data
@@ -136,7 +142,6 @@ void FailureRecoveryManager::write_log(const ExecutionResult& info) {
         flush_buffer();
     }
 
-    // Output Debugging
     std::cout << "FRM: Log ID " << entry.log_id << " untuk T" << entry.transaction_id
               << " (" << entry.query.substr(0, std::min((int)entry.query.size(), 30))
               << (entry.query.size() > 30 ? "..." : "") << ") ditambahkan ke buffer. Op: "
@@ -150,7 +155,7 @@ void FailureRecoveryManager::write_log(const ExecutionResult& info) {
 }
 
 void FailureRecoveryManager::save_checkpoint() {
-    std::cout << "FRM: Menyimpan checkpoint (stub)..." << std::endl;
+    std::cout << "FRM: Menyimpan checkpoint..." << std::endl;
     std::lock_guard<std::mutex> lock(this->mtx);
     flush_buffer();
 
@@ -290,7 +295,6 @@ std::string FailureRecoveryManager::read_string(std::ifstream& in) {
 
 void FailureRecoveryManager::write_any(std::ofstream& out, const std::any& val) {
     if (!val.has_value()) {
-        // Handle empty/null values if necessary, here we skip or throw
         return; 
     }
 
@@ -398,6 +402,7 @@ void FailureRecoveryManager::write_log_to_file(std::ofstream& out, const LogEntr
         write_string(out, entry.query);
     } else if (entry.operation == Operation::CHECKPOINT) {
         write_string(out, entry.table_name);
+        write_string(out, entry.query);
     }
 }
 
@@ -429,6 +434,7 @@ LogEntry FailureRecoveryManager::read_log_from_file(std::ifstream& in) {
         entry.query = read_string(in);
     } else if (entry.operation == Operation::CHECKPOINT) {
         entry.table_name = read_string(in);
+        entry.query = read_string(in);
     }
 
     return entry;
@@ -600,6 +606,29 @@ std::any FailureRecoveryManager::string_to_any(const std::string& str) {
     return str;
 }
 
+std::set<int> FailureRecoveryManager::parse_checkpoint_list(const std::string& query) {
+    std::set<int> active_tids;
+    size_t start = query.find('[');
+    size_t end = query.find(']');
+    
+    if (start == std::string::npos || end == std::string::npos || end <= start) {
+        return active_tids;
+    }
+    
+    std::string list_str = query.substr(start + 1, end - start - 1);
+    std::istringstream iss(list_str);
+    std::string token;
+    
+    while (std::getline(iss, token, ',')) {
+        try {
+            int tid = std::stoi(token);
+            active_tids.insert(tid);
+        } catch (...) {}
+    }
+    
+    return active_tids;
+}
+
 bool FailureRecoveryManager::undo_operation(const LogEntry& entry) {
     std::cout << "FRM: Melakukan UNDO untuk operasi " << operation_to_string(entry.operation) << std::endl;
     
@@ -683,12 +712,144 @@ bool FailureRecoveryManager::undo_operation(const LogEntry& entry) {
     }
 }
 
+bool FailureRecoveryManager::redo_operation(const LogEntry& entry) {
+    std::cout << "FRM: Melakukan REDO untuk operasi " << operation_to_string(entry.operation) << " LID:" << entry.log_id << std::endl;
+
+    try {
+        switch (entry.operation) {
+            case Operation::INSERT: {
+                std::cout << "FRM: REDO INSERT - Memasukkan kembali row dengan ID " << entry.new_value.row_id 
+                          << " ke tabel " << entry.table_name << std::endl;
+
+                // REDO INSERT: Masukkan kembali new_value
+                DataWrite<Row> write;
+                write.table = entry.table_name;
+                write.new_value = entry.new_value;
+                write.is_insert = true;
+                storage_engine_.write_block(write);
+                return true;
+            }
+            case Operation::DELETE: {
+                std::cout << "FRM: REDO DELETE - Menghapus kembali row dengan ID " << entry.old_value.row_id 
+                          << " dari tabel " << entry.table_name << std::endl;
+
+                // REDO DELETE: Hapus kembali old_value
+                std::vector<Condition> conditions = row_to_conditions(entry.old_value, entry.table_name);
+                
+                if (conditions.empty()) {
+                    std::cerr << "FRM Error: Tidak bisa membuat kondisi untuk REDO DELETE" << std::endl;
+                    return false;
+                }
+
+                DataDeletion deletion;
+                deletion.table = entry.table_name;
+                deletion.conditions = conditions;
+                storage_engine_.delete_block(deletion);
+                return true;
+            }
+            case Operation::UPDATE: {
+                std::cout << "FRM: REDO UPDATE - Memperbarui row dengan ID " << entry.new_value.row_id 
+                          << " pada tabel " << entry.table_name << std::endl;
+
+                // REDO UPDATE: Perbarui ke new_value
+                std::vector<Condition> conditions = row_to_conditions(entry.new_value, entry.table_name);
+                
+                if (conditions.empty()) {
+                    std::cerr << "FRM Error: Tidak bisa membuat kondisi untuk REDO UPDATE" << std::endl;
+                    return false;
+                }
+
+                DataWrite<Row> write;
+                write.table = entry.table_name;
+                write.new_value = entry.new_value;
+                write.conditions = conditions;
+                write.is_insert = false;
+                storage_engine_.write_block(write);
+                return true;
+            }
+            default:
+                std::cerr << "FRM Error: Operasi " << operation_to_string(entry.operation) 
+                          << " tidak dapat di-REDO" << std::endl;
+                return false;
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "FRM Error: Exception during REDO - " << e.what() << std::endl;
+        return false;
+    }
+
+    return true;
+}
+
+void FailureRecoveryManager::recover_from_crash() {
+    if (!std::filesystem::exists(this->log_file_path)) return;
+
+    std::cout << "FRM: Memulai recovery dari crash..." << std::endl;
+
+    std::vector<LogEntry> all_logs = read_all_logs(this->log_file_path);
+    if (all_logs.empty()) {
+        std::cout << "FRM: Tidak ada log untuk di-recover." << std::endl;
+        return;
+    }
+
+    std::set<int> undo_list;
+    int redo_start_index = 0;
+
+    // Proses mencari checkpoint terakhir dan build undo_list
+    for (int i = static_cast<int>(all_logs.size()) - 1; i >= 0; i--) {
+        if (all_logs[i].operation == Operation::CHECKPOINT) {
+            undo_list = parse_checkpoint_list(all_logs[i].query);
+            redo_start_index = i;
+            std::cout << "FRM: Checkpoint ditemukan di log_id " << all_logs[i].log_id 
+                      << " dengan " << undo_list.size() << " transaksi aktif di checkpoint." << std::endl;
+            break;
+        }
+    }
+
+    // Scan log setelah checkpoint untuk update status transaksi
+    for (size_t i = redo_start_index; i < all_logs.size(); i++) {
+        const LogEntry& entry = all_logs[i];
+        
+        if (entry.operation == Operation::BEGIN) {
+            undo_list.insert(entry.transaction_id);
+        } 
+        else if (entry.operation == Operation::COMMIT || entry.operation == Operation::ABORT) {
+            undo_list.erase(entry.transaction_id);
+        }
+    }
+    
+    std::cout << "FRM: Ditemukan " << undo_list.size() << " transaksi uncommitted yang perlu di-UNDO." << std::endl;
+
+    // Fase UNDO untuk transaksi yang belum selesai
+    std::cout << "FRM: Memulai Fase UNDO untuk " << undo_list.size() << " transaksi yang belum selesai." << std::endl;
+    
+    if (undo_list.empty()) {
+        std::cout << "FRM: Tidak ada transaksi yang perlu di-UNDO." << std::endl;
+        return;
+    } else {
+        for (int i = static_cast<int>(all_logs.size()) - 1; i >= 0; i--) {
+            const LogEntry& entry = all_logs[i];
+            if (undo_list.count(entry.transaction_id)) {
+                if (entry.operation == Operation::BEGIN) {
+                    undo_list.erase(entry.transaction_id);
+                } 
+                else if (entry.operation != Operation::CHECKPOINT) {
+                    undo_operation(entry);
+                }
+            }
+            
+            if (undo_list.empty()) break;
+        }
+    }
+
+    std::cout << "FRM: Recovery dari crash selesai." << std::endl;
+}
+
 void FailureRecoveryManager::flush_buffer() {
     if (this->log_buffer.empty()) {
         return;
     }
 
-    std::ofstream log_file(this->log_file_path, std::ios::app);
+    std::ofstream log_file(this->log_file_path, std::ios::app | std::ios::binary);
 
     if (!log_file.is_open()) {
         std::cerr << "FRM: Gagal membuka file log untuk penulisan: " << this->log_file_path << std::endl;
@@ -710,6 +871,21 @@ void FailureRecoveryManager::flush_buffer() {
     if (text_file.is_open()) text_file.close();
     this->log_buffer.clear();
     std::cout << "FRM: Flush log buffer ke file " << this->log_file_path << "." << std::endl;
+}
+
+void FailureRecoveryManager::debug_run_crash_recovery() {
+    std::cout << "\n[TEST] Memicu System Failure Recovery secara manual..." << std::endl;
+    recover_from_crash();
+}
+
+void FailureRecoveryManager::reset_state_for_testing() {
+    std::lock_guard<std::mutex> lock(this->mtx);
+    this->active_transactions_cache.clear();
+    this->log_buffer.clear();
+    this->checkpoints.clear();
+    this->next_log_id = 1;
+    this->next_checkpoint_id = 1;
+    std::cout << "[TEST] FailureRecoveryManager state reset" << std::endl;
 }
 
 } // namespace mdbms::fr

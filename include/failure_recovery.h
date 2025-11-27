@@ -20,10 +20,10 @@ public:
     void save_checkpoint();
     void recover(const RecoverCriteria& criteria);
 
-    // ===============================================================================================================================================
-    // Fungsi akal-akalan supaya public (untuk testing saja)
+    // Untuk testing purposes
     std::vector<LogEntry> read_all_logs_public(const std::string& file_path);
-    // ===============================================================================================================================================
+    void debug_run_crash_recovery();
+    void reset_state_for_testing();
 
 private:
     FailureRecoveryManager();
@@ -91,9 +91,16 @@ private:
 
     // ===============================================================================================================================================
     
+    // Helper untuk parsing checkpoint list dari query string
+    std::set<int> parse_checkpoint_list(const std::string& query);
+    
     // Helper untuk melakukan UNDO operasi berdasarkan log entry
-    // Baru undo karena untuk milestone 2 fokus ke transaction abort recovery. Redo diperlukan buat system failure nanti
     bool undo_operation(const LogEntry& entry);
+
+    // Helper untuk melakukan REDO operasi berdasarkan log entry
+    bool redo_operation(const LogEntry& entry);
+
+    void recover_from_crash();
     
     void flush_buffer();
 };

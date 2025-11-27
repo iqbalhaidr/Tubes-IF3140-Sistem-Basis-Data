@@ -697,6 +697,121 @@ void test_update_and_undo_with_storage() {
     std::cout << GREEN << "✓ PASS: UPDATE UNDO recovery logic verified (storage manager limitations noted)" << RESET << std::endl;
 }
 
+void test_system_crash_recovery() {
+    std::cout << BOLD << "\n=== TEST: SYSTEM CRASH RECOVERY (ARIES SIMULATION) ===" << RESET << std::endl;
+    
+    clean_environment(); // Hapus log lama
+    
+    auto& frm = fr::FailureRecoveryManager::get_instance();
+    frm.reset_state_for_testing(); // Reset internal state untuk test bersih
+    auto& storage = mdbms::sm::StorageEngine::get_instance();
+    
+    // === CLEANUP DATABASE: Hapus semua data test sebelumnya ===
+    std::cout << "[CLEANUP] Removing all test data from previous tests..." << std::endl;
+    
+    // Remove all rows with test IDs
+    std::vector<int> test_ids = {100, 666, 777, 888, 999};
+    for (int id : test_ids) {
+        mdbms_::Condition cleanup_cond;
+        cleanup_cond.column = "StudentID";
+        cleanup_cond.operation = "=";
+        cleanup_cond.operand = id;
+        mdbms_::DataDeletion cleanup_del;
+        cleanup_del.table = "Student";
+        cleanup_del.conditions = {cleanup_cond};
+        int deleted = storage.delete_block(cleanup_del);
+        if (deleted > 0) {
+            std::cout << "[CLEANUP] Removed " << deleted << " rows with StudentID=" << id << std::endl;
+        }
+    }
+    
+    std::cout << "[CLEANUP] Database cleaned" << std::endl;
+    
+    // --- FASE 1: SIMULASI KEADAAN SEBELUM CRASH ---
+    std::cout << "[Phase 1] Preparing Pre-Crash State..." << std::endl;
+
+    // 1. Transaksi Sukses (TX 100) - Harusnya AMAN
+    mdbms_::Row rowSafe;
+    rowSafe.table_name = "Student";
+    rowSafe.columns["StudentID"] = 100;
+    rowSafe.columns["FullName"] = std::string("Aman Sentosa");
+    rowSafe.columns["GPA"] = 4.0f;
+
+    // Tulis ke Storage (Simulasi data sudah masuk disk)
+    mdbms_::DataWrite<mdbms_::Row> writeSafe;
+    writeSafe.table = "Student"; writeSafe.new_value = rowSafe; writeSafe.is_insert = true;
+    storage.write_block(writeSafe);
+
+    // Tulis Log (Lengkap dengan COMMIT)
+    mdbms_::ExecutionResult r1_begin; r1_begin.transaction_id = 100; r1_begin.query = "BEGIN"; r1_begin.success=true;
+    frm.write_log(r1_begin);
+    
+    mdbms_::ExecutionResult r1_ins; r1_ins.transaction_id = 100; r1_ins.query = "INSERT INTO Student ..."; r1_ins.success=true;
+    r1_ins.data.data.push_back(rowSafe); // Payload untuk Redo/Undo
+    frm.write_log(r1_ins);
+
+    mdbms_::ExecutionResult r1_com; r1_com.transaction_id = 100; r1_com.query = "COMMIT"; r1_com.success=true;
+    frm.write_log(r1_com);
+
+
+    // 2. Transaksi Gagal/Crash (TX 666) - Harusnya HILANG (Di-Undo)
+    mdbms_::Row rowDirty;
+    rowDirty.table_name = "Student";
+    rowDirty.columns["StudentID"] = 666; // Angka sial (crash victim)
+    rowDirty.columns["FullName"] = std::string("Korban Crash");
+    rowDirty.columns["GPA"] = 0.0f;
+
+    // Tulis ke Storage (Simulasi Dirty Write: data masuk disk sebelum commit)
+    mdbms_::DataWrite<mdbms_::Row> writeDirty;
+    writeDirty.table = "Student"; writeDirty.new_value = rowDirty; writeDirty.is_insert = true;
+    storage.write_block(writeDirty);
+
+    // Tulis Log (HANYA BEGIN & INSERT, TIDAK ADA COMMIT)
+    mdbms_::ExecutionResult r2_begin; r2_begin.transaction_id = 666; r2_begin.query = "BEGIN"; r2_begin.success=true;
+    frm.write_log(r2_begin);
+
+    mdbms_::ExecutionResult r2_ins; r2_ins.transaction_id = 666; r2_ins.query = "INSERT INTO Student ..."; r2_ins.success=true;
+    r2_ins.data.data.push_back(rowDirty);
+    frm.write_log(r2_ins);
+
+    frm.save_checkpoint(); 
+
+    std::cout << "[Phase 1] Data written. TX 100 Committed. TX 666 Uncommitted. 'Crashing' now..." << std::endl;
+
+    frm.debug_run_crash_recovery();
+
+    // --- FASE 3: VERIFIKASI DATA ---
+    std::cout << "[Phase 3] Verifying Data Consistency..." << std::endl;
+
+    mdbms_::DataRetrieval getSafe;
+    getSafe.table = "Student";
+    getSafe.columns = {"*"};
+    mdbms_::Condition condSafe; condSafe.column = "StudentID"; condSafe.operation = "="; condSafe.operand = 100;
+    getSafe.conditions.push_back(condSafe);
+    
+    auto resultSafe = storage.read_block(getSafe);
+    if (resultSafe.data.size() == 1) {
+        std::cout << "   [OK] Data Committed (ID 100) Still Exists." << std::endl;
+    } else {
+        std::cout << RED << "   [FAIL] Data Committed (ID 100) Lost!" << RESET << std::endl;
+        assert(false);
+    }
+
+    mdbms_::DataRetrieval getDirty;
+    getDirty.table = "Student";
+    getDirty.columns = {"*"};
+    mdbms_::Condition condDirty; condDirty.column = "StudentID"; condDirty.operation = "="; condDirty.operand = 666;
+    getDirty.conditions.push_back(condDirty);
+
+    auto resultDirty = storage.read_block(getDirty);
+    if (resultDirty.data.size() == 0) {
+        std::cout << GREEN << "PASS: System Failure Recovery berhasil! Data uncommitted (ID 666) dihapus." << RESET << std::endl;
+    } else {
+        std::cout << RED << "FAIL: System Failure Recovery Gagal! Data uncommitted (ID 666) masih ada di disk." << RESET << std::endl;
+        assert(false);
+    }
+}
+
 int main() {
     clean_environment();
 
@@ -717,6 +832,9 @@ int main() {
     test_insert_and_undo_with_storage();
     test_delete_and_undo_with_storage();
     test_update_and_undo_with_storage();
+
+    // === SYSTEM CRASH RECOVERY TEST ===
+    test_system_crash_recovery();
     
     // Membersihkan log buffer dan menulis ke file
     fr::FailureRecoveryManager::get_instance().save_checkpoint();
