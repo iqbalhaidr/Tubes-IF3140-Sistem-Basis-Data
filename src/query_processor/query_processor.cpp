@@ -651,14 +651,160 @@ int QueryProcessor::execute_update(const mdbms::qo::ParsedQuery& parsed_query, i
     return affected_rows;
 }
 
-// TODO
-int QueryProcessor::execute_insert(const mdbms::qo::ParsedQuery& parsed_query, int transaction_id){
-    return 0;
+int QueryProcessor::execute_insert(const mdbms::qo::ParsedQuery& parsed_query, int transaction_id) {
+    int affected_rows = 0;
+
+    try {
+        if (parsed_query.from_tables.empty()) {
+            throw std::runtime_error("INSERT requires a table name");
+        }
+
+        std::string table_name = parsed_query.from_tables[0];
+
+        // Request WRITE access from CCM
+        if (ccm_manager) {
+            Row request;
+            request.table_name = table_name;
+            request.row_id = -1; // New row
+            Response access = ccm_manager->validate_object(request, transaction_id, Action::WRITE);
+            if (!access.allowed) {
+                throw std::runtime_error("Concurrency control denied WRITE access for table " + table_name);
+            }
+            ccm_manager->log_object(request, transaction_id);
+        }
+
+        // Get table schema to map values to columns
+        DataRetrieval retrieval;
+        retrieval.table = table_name;
+        retrieval.columns = {"*"};
+        retrieval.search_type = SearchType::LINEAR;
+        Rows<Row> schema_info = sm_engine->read_block(retrieval);
+
+        if (parsed_query.insert_values.size() != schema_info.column_names.size()) {
+             // Warning or error if size mismatch. For now, proceed with what we have.
+        }
+
+        DataWrite<Row> single_insert;
+        single_insert.table = table_name;
+        single_insert.is_insert = true;
+        single_insert.new_value.table_name = table_name;
+        
+        // Map values
+        for (size_t i = 0; i < parsed_query.insert_values.size(); ++i) {
+            if (i < schema_info.column_names.size()) {
+                std::string col_name = schema_info.column_names[i];
+                single_insert.new_value.columns[col_name] = parsed_query.insert_values[i];
+                single_insert.columns.push_back(col_name);
+            }
+        }
+
+        int res = sm_engine->write_block(single_insert);
+        if (res > 0) affected_rows = res;
+
+        std::cout << "QP: Inserted " << affected_rows << " rows into " << table_name << std::endl;
+
+        // Log to FRM
+        if (frm_manager && affected_rows > 0) {
+             ExecutionResult log_result;
+            log_result.transaction_id = transaction_id;
+            log_result.timestamp = std::time(nullptr);
+            if (!parsed_query.original_query.empty()) {
+                log_result.query = parsed_query.original_query;
+            } else {
+                log_result.query = "INSERT INTO " + table_name;
+            }
+            log_result.success = true;
+            log_result.affected_rows = affected_rows;
+            
+            // Log inserted data for UNDO
+            Rows<Row> inserted_data;
+            inserted_data.column_names = schema_info.column_names;
+            inserted_data.data.push_back(single_insert.new_value);
+            inserted_data.rows_count = 1;
+            log_result.data = inserted_data;
+
+            frm_manager->write_log(log_result);
+        }
+
+    } catch (const std::exception& e) {
+        std::cerr << "QP INSERT error: " << e.what() << std::endl;
+        throw;
+    }
+
+    return affected_rows;
 }
 
-// TODO
-int QueryProcessor::execute_delete(const mdbms::qo::ParsedQuery& parsed_query, int transaction_id){
-    return 0;
+int QueryProcessor::execute_delete(const mdbms::qo::ParsedQuery& parsed_query, int transaction_id) {
+    int affected_rows = 0;
+
+    try {
+        if (parsed_query.from_tables.empty()) {
+            throw std::runtime_error("DELETE requires a table name");
+        }
+
+        std::string table_name = parsed_query.from_tables[0];
+
+        // Request WRITE access
+        if (ccm_manager) {
+            Row request;
+            request.table_name = table_name;
+            request.row_id = -1; 
+            Response access = ccm_manager->validate_object(request, transaction_id, Action::WRITE);
+            if (!access.allowed) {
+                throw std::runtime_error("Concurrency control denied WRITE access for table " + table_name);
+            }
+            ccm_manager->log_object(request, transaction_id);
+        }
+
+        // Find rows to delete first (for logging and accurate count)
+        DataRetrieval retrieval;
+        retrieval.table = table_name;
+        retrieval.columns = {"*"};
+        retrieval.search_type = SearchType::LINEAR;
+        Rows<Row> all_rows = sm_engine->read_block(retrieval);
+
+        Rows<Row> rows_to_delete;
+        if (!parsed_query.where_conditions.empty()) {
+            rows_to_delete = apply_where_clause(all_rows, parsed_query.where_conditions);
+        } else {
+            rows_to_delete = all_rows;
+        }
+
+        std::cout << "QP: Found " << rows_to_delete.rows_count << " rows to delete from " << table_name << std::endl;
+
+        DataDeletion deletion;
+        deletion.table = table_name;
+        deletion.conditions = parsed_query.where_conditions;
+
+        affected_rows = sm_engine->delete_block(deletion);
+
+        std::cout << "QP: Deleted " << affected_rows << " rows from " << table_name << std::endl;
+
+        // Log to FRM
+        if (frm_manager && affected_rows > 0) {
+            ExecutionResult log_result;
+            log_result.transaction_id = transaction_id;
+            log_result.timestamp = std::time(nullptr);
+            if (!parsed_query.original_query.empty()) {
+                log_result.query = parsed_query.original_query;
+            } else {
+                log_result.query = "DELETE FROM " + table_name;
+            }
+            log_result.success = true;
+            log_result.affected_rows = affected_rows;
+            
+            // Store deleted rows for UNDO (insert them back)
+            log_result.data = rows_to_delete;
+            
+            frm_manager->write_log(log_result);
+        }
+
+    } catch (const std::exception& e) {
+        std::cerr << "QP DELETE error: " << e.what() << std::endl;
+        throw;
+    }
+
+    return affected_rows;
 }
 
 int QueryProcessor::begin_transaction() {
