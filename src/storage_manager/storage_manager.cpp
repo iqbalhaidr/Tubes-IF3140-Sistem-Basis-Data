@@ -477,7 +477,7 @@ TableSchema StorageEngine::get_table_schema(const std::string& table) {
 
 bool StorageEngine::create_table(const TableSchema& schema) {
     std::string schema_filename = data_dir_ + "/" + schema.table_name + ".schema";
-    std::ofstream outfile(schema_filename, std::ios::binary | std::ios::app);
+    std::ofstream outfile(schema_filename, std::ios::binary | std::ios::trunc);
     if (!outfile.is_open()) {
         std::cerr << "SM: Gagal membuka file schema untuk tabel: " << schema.table_name << std::endl;
         throw std::runtime_error("Gagal membuka file schema");
