@@ -90,22 +90,18 @@ ExecutionResult QueryProcessor::execute_query(const std::string& query) {
             result.data = rows;
             result.affected_rows = rows.rows_count;
             result.message = "Retrieved " + std::to_string(rows.rows_count) + " rows";
-            result.success = true;
         } else if (query_type == "UPDATE") {
             int affected = execute_update(optimized_query, current_transaction_id);
             result.affected_rows = affected;
             result.message = "Updated " + std::to_string(affected) + " rows";
-            result.success = true;
         } else if (query_type == "INSERT") {
             int affected = execute_insert(optimized_query, current_transaction_id);
             result.affected_rows = affected;
             result.message = "Inserted " + std::to_string(affected) + " rows";
-            result.success = true;
         } else if (query_type == "DELETE") {
             int affected = execute_delete(optimized_query, current_transaction_id);
             result.affected_rows = affected;
             result.message = "Deleted " + std::to_string(affected) + " rows";
-            result.success = true;
         } else if (query_type == "CREATE") {
             bool success = execute_create_table(optimized_query, current_transaction_id);
             result.success = success;
@@ -125,7 +121,8 @@ ExecutionResult QueryProcessor::execute_query(const std::string& query) {
             frm_manager->write_log(result);
         }
 
-        if (result.success && ccm_manager && query_type == "SELECT") {
+        // Auto-commit queries
+        if (ccm_manager) {
             ccm_manager->end_transaction(result.transaction_id);
             current_transaction_id = -1;
         }
