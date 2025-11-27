@@ -134,7 +134,7 @@ class OptimizationEngine {
     static OptimizationEngine& get_instance();
 
     ParsedQuery parse_query(const std::string& query);
-    ParsedQuery optimize_query(const ParsedQuery& query);
+    ParsedQuery optimize_query(const ParsedQuery& query, const mdbms::sm::StorageEngine* storage = nullptr);
 };
 
 // Parser and logical plan builder helpers

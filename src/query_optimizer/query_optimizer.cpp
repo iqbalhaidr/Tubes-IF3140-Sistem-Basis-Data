@@ -16,8 +16,7 @@ ParsedQuery OptimizationEngine::parse_query(const std::string& query) {
     return parsed;
 }
 
-ParsedQuery OptimizationEngine::optimize_query(const ParsedQuery& query) {
-    // DUMMY 
+ParsedQuery OptimizationEngine::optimize_query(const ParsedQuery& query, const mdbms::sm::StorageEngine* storage) {
     ParsedQuery optimized = query;
     if (!optimized.query_tree) {
         return optimized;
@@ -30,7 +29,13 @@ ParsedQuery OptimizationEngine::optimize_query(const ParsedQuery& query) {
             query.from_tables,
             query.select_columns
         );
-        optimized.query_tree->estimated_cost = optimized.estimated_cost;
+        
+        if (storage && optimized.query_tree) {
+            optimized.query_tree->estimated_cost = estimate_cost(*optimized.query_tree, storage);
+            optimized.estimated_cost = optimized.query_tree->estimated_cost;
+        } else {
+            optimized.query_tree->estimated_cost = optimized.estimated_cost;
+        }
     } else {
         optimized.query_tree = new QueryTree();
         optimized.query_tree->type = "DUMMY";
@@ -39,7 +44,6 @@ ParsedQuery OptimizationEngine::optimize_query(const ParsedQuery& query) {
         optimized.query_tree->estimated_cost = optimized.estimated_cost;
     }
 
-    // TODO(#optimizer): gunakan optimizer_rules setelah QueryTree siap diproses.
     return optimized;
 }
 

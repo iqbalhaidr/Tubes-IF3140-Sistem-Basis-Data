@@ -83,8 +83,8 @@ ExecutionResult QueryProcessor::execute_query(const std::string& query) {
         }
         result.transaction_id = current_transaction_id;
 
-        // Optimize query
-        mdbms::qo::ParsedQuery optimized_query = qo_engine->optimize_query(parsed_query);
+        // Optimize query with storage engine for cost estimation
+        mdbms::qo::ParsedQuery optimized_query = qo_engine->optimize_query(parsed_query, sm_engine);
 
         // Execute based on query type
         if (query_type == "SELECT") {

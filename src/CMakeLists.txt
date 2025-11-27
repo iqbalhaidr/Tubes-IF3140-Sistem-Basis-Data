@@ -25,7 +25,11 @@ add_executable(test_query_optimizer
     ${CMAKE_SOURCE_DIR}/tests/test_query_optimizer.cpp
 )
 
-target_link_libraries(test_query_optimizer qo_lib)
+target_link_libraries(test_query_optimizer 
+    PRIVATE
+    qo_lib
+    sm_lib
+)
 
 add_executable(test_query_processor
     ${CMAKE_SOURCE_DIR}/tests/test_query_processor.cpp
