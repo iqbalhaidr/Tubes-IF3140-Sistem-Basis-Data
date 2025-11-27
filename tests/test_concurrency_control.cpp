@@ -281,7 +281,7 @@ void test_twoPL_cc() {
     // tid3 mencoba write row1 (setelah tid1 lepas lock)
     Response response6 = ccm.validate_object(row1, tid3, Action::WRITE);
     print_response("Transaction " + std::to_string(tid3) + " WRITE on Row1: ", response6);
-    print_result("T3 WRITE Row1 after T1 ends", response6.allowed == true);
+    print_result("T3 WRITE Row1 after T1 ends", response6.allowed == false);
 
     ccm.end_transaction(tid2);
     ccm.end_transaction(tid3);
@@ -343,20 +343,20 @@ void test_twoPL_deadlock() {
     print_response("Transaction " + std::to_string(tid2) + " READ on Row2: ", response2);
     print_result("T2 READ Row2 (expect allowed)", response2.allowed == true);
 
-    // T1 write R2 (punya T2) -> sekarang abort, nanti nunggu
+    // T1 write R2 (punya T2), masuk ke wait queue
     Response response3 = ccm.validate_object(row2, tid1, Action::WRITE);
     print_response("Transaction " + std::to_string(tid1) + " WRITE on Row2: ", response3);
     print_result("T1 WRITE Row2 (expect fail due to conflict)", response3.allowed == false);
 
-    // T2 write R1 (punya T1) -> sekarang bisa langsung aja, nanti jadi deadlock
+    // T2 write R1 (punya T1), terjadi deadlock, T2 abort
     Response response4 = ccm.validate_object(row1, tid2, Action::WRITE);
     print_response("Transaction " + std::to_string(tid2) + " WRITE on Row1: ", response4);
-    print_result("T2 WRITE Row1 (expect allowed)", response4.allowed == true);
+    print_result("T2 WRITE Row1 (expect fail due to deadlock)", response4.allowed == false);
 
-    // sekarang T1 udah abort, nanti dicek apakah T1 masih bisa lanjut
+    // sekarang T1 bisa lanjut karena T2 di-abort
     Response response5 = ccm.validate_object(row1, tid1, Action::WRITE);
     print_response("Transaction " + std::to_string(tid1) + " WRITE on Row1: ", response5);
-    print_result("T1 WRITE Row1 after abort (expect fail)", response5.allowed == false);
+    print_result("T1 WRITE Row1 after abort (expect allowed)", response5.allowed == true);
 
     ccm.end_transaction(tid1);
     ccm.end_transaction(tid2);
@@ -384,7 +384,7 @@ void test_twoPL_deadlock_abort() {
     print_response("Transaction " + std::to_string(tid2) + " WRITE on Row2: ", response2);
     print_result("T2 WRITE Row2 (expect allowed)", response2.allowed == true);
 
-    // T1 write R2 (punya T2) -> sekarang abort, nanti nunggu
+    // T1 write R2 (punya T2), T1 masuk wait queue
     ccm.log_object(row2, tid1);
     Response response3 = ccm.validate_object(row2, tid1, Action::WRITE);
     print_response("Transaction " + std::to_string(tid1) + " WRITE on Row2: ", response3);
@@ -394,11 +394,12 @@ void test_twoPL_deadlock_abort() {
     ccm.log_object(row1, tid2);
     Response response4 = ccm.validate_object(row1, tid2, Action::WRITE);
     print_response("Transaction " + std::to_string(tid2) + " WRITE on Row1: ", response4);
-    print_result("T2 WRITE Row1 (expect allowed)", response4.allowed == true);
+    print_result("T2 WRITE Row1 (expect fail due to deadlock)", response4.allowed == false);
 
+    // T2 di-abort, T1 dapat lanjut
     Response response5 = ccm.validate_object(row1, tid1, Action::WRITE);
-    print_response("T1 WRITE Row1 AFTER ABORT", response5);
-    print_result("T1 WRITE Row1 after abort (expect fail)", response5.allowed == false);
+    print_response("Transaction " + std::to_string(tid1) + " WRITE on Row1 AFTER ABORT", response5);
+    print_result("T1 WRITE Row1 after abort (expect allowed)", response5.allowed == true);
     ccm.end_transaction(tid1);
     ccm.end_transaction(tid2);
 }
