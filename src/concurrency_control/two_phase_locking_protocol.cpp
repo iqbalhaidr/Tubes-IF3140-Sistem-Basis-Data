@@ -78,9 +78,15 @@ Response TwoPhaseLockingCCManager::validate_object(const Row& object, int transa
     // TODO: implementasi waiting
     // either urusan qp atau bikin queue di sini (bisa juga pake notify_all dari mutex)
     if (!lock_acquired) {
-        std::cout << "2PL: Transaksi " << transaction_id << " gagal memperoleh kunci untuk record "
-                  << record_hash << std::endl;
-        abort_transaction(transaction_id);
+        auto transaction_info = transactions[transaction_id];
+
+        if (transaction_info->status == TransactionStatus::ABORTED) {
+            std::cout << "2PL: Transaksi " << transaction_id
+                      << " gagal memperoleh kunci untuk record " << record_hash << std::endl;
+            return Response(false, transaction_id);
+        }
+
+        std::cout << "2PL: Transaksi " << transaction_id << " masuk mode WAITING..." << std::endl;
         return Response(false, transaction_id);
     }
 
@@ -91,6 +97,30 @@ bool TwoPhaseLockingCCManager::acquire_s_lock(int transaction_id, size_t record_
     std::cout << "2PL: Transaksi " << transaction_id << " mencoba memperoleh S lock pada record "
               << record_hash << std::endl;
     auto transaction_info = transactions[transaction_id];
+
+    // apakah record memiliki antrian wait
+    if (lock_wait_queue.count(record_hash) && !lock_wait_queue[record_hash].empty()) {
+        // antrian kosong dan bukan transaksi ini, berarti terjadi wait
+        if (lock_wait_queue[record_hash].front() != transaction_id) {
+            bool is_queued = false;
+            for (int id : lock_wait_queue[record_hash]) {
+                if (id == transaction_id) {
+                    std::cout << "2PL: Transaksi " << transaction_id
+                              << " masih dalam antrian untuk record " << record_hash << std::endl;
+                    is_queued = true;
+                    break;
+                }
+            }
+
+            if (!is_queued) {
+                lock_wait_queue[record_hash].push_back(transaction_id);
+                std::cout << "2PL: Transaksi " << transaction_id << " masuk antrian untuk record "
+                          << record_hash << std::endl;
+            }
+
+            return false;
+        }
+    }
 
     // sudah memiliki slock
     if (transaction_info->locked_records.count(record_hash)) {
@@ -111,6 +141,19 @@ bool TwoPhaseLockingCCManager::acquire_s_lock(int transaction_id, size_t record_
                           << record_hash << " yang dipegang oleh transaksi " << holding_trx_id
                           << std::endl;
                 wait_for_graph[transaction_id].insert(holding_trx_id);
+
+                bool is_queued = false;
+                if (lock_wait_queue.count(record_hash)) {
+                    for (int id : lock_wait_queue[record_hash]) {
+                        if (id == transaction_id) {
+                            is_queued = true;
+                            break;
+                        }
+                    }
+                }
+                if (!is_queued) {
+                    lock_wait_queue[record_hash].push_back(transaction_id);
+                }
             }
             return false;
         }
@@ -123,6 +166,16 @@ bool TwoPhaseLockingCCManager::acquire_s_lock(int transaction_id, size_t record_
     // hapus dari wait-for graph jika ada
     wait_for_graph.erase(transaction_id);
 
+    // hapus dari queue wait jika ada
+    if (lock_wait_queue.count(record_hash) && !lock_wait_queue[record_hash].empty()) {
+        if (lock_wait_queue[record_hash].front() == transaction_id) {
+            lock_wait_queue[record_hash].pop_front();
+            if (lock_wait_queue[record_hash].empty()) {
+                lock_wait_queue.erase(record_hash);
+            }
+        }
+    }
+
     std::cout << "2PL: Transaksi " << transaction_id << " memperoleh S lock pada record "
               << record_hash << std::endl;
     return true;
@@ -132,6 +185,30 @@ bool TwoPhaseLockingCCManager::acquire_x_lock(int transaction_id, size_t record_
     std::cout << "2PL: Transaksi " << transaction_id << " mencoba memperoleh X lock pada record "
               << record_hash << std::endl;
     auto transaction_info = transactions[transaction_id];
+
+    // apakah record memiliki antrian wait
+    if (lock_wait_queue.count(record_hash) && !lock_wait_queue[record_hash].empty()) {
+        // antrian kosong dan bukan transaksi ini, berarti terjadi wait
+        if (lock_wait_queue[record_hash].front() != transaction_id) {
+            bool is_queued = false;
+            for (int id : lock_wait_queue[record_hash]) {
+                if (id == transaction_id) {
+                    std::cout << "2PL: Transaksi " << transaction_id
+                              << " masih dalam antrian untuk record " << record_hash << std::endl;
+                    is_queued = true;
+                    break;
+                }
+            }
+
+            if (!is_queued) {
+                lock_wait_queue[record_hash].push_back(transaction_id);
+                std::cout << "2PL: Transaksi " << transaction_id << " masuk antrian untuk record "
+                          << record_hash << std::endl;
+            }
+
+            return false;
+        }
+    }
 
     // sudah memiliki xlock
     if (x_lock_table.count(record_hash) && x_lock_table[record_hash] == transaction_id) {
@@ -152,6 +229,19 @@ bool TwoPhaseLockingCCManager::acquire_x_lock(int transaction_id, size_t record_
                           << record_hash << " yang dipegang oleh transaksi " << holding_trx_id
                           << std::endl;
                 wait_for_graph[transaction_id].insert(holding_trx_id);
+
+                bool is_queued = false;
+                if (lock_wait_queue.count(record_hash)) {
+                    for (int id : lock_wait_queue[record_hash]) {
+                        if (id == transaction_id) {
+                            is_queued = true;
+                            break;
+                        }
+                    }
+                }
+                if (!is_queued) {
+                    lock_wait_queue[record_hash].push_back(transaction_id);
+                }
             }
             return false;
         }
@@ -174,6 +264,19 @@ bool TwoPhaseLockingCCManager::acquire_x_lock(int transaction_id, size_t record_
                                   << " yang dipegang oleh transaksi " << holding_trx_id
                                   << std::endl;
                         wait_for_graph[transaction_id].insert(holding_trx_id);
+
+                        bool is_queued = false;
+                        if (lock_wait_queue.count(record_hash)) {
+                            for (int id : lock_wait_queue[record_hash]) {
+                                if (id == transaction_id) {
+                                    is_queued = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if (!is_queued) {
+                            lock_wait_queue[record_hash].push_back(transaction_id);
+                        }
                     }
                     return false;
                 }
@@ -192,6 +295,16 @@ bool TwoPhaseLockingCCManager::acquire_x_lock(int transaction_id, size_t record_
     x_lock_table[record_hash] = transaction_id;
     transactions[transaction_id]->locked_records.insert(record_hash);
     wait_for_graph.erase(transaction_id);
+
+    // hapus dari queue wait jika ada
+    if (lock_wait_queue.count(record_hash) && !lock_wait_queue[record_hash].empty()) {
+        if (lock_wait_queue[record_hash].front() == transaction_id) {
+            lock_wait_queue[record_hash].pop_front();
+            if (lock_wait_queue[record_hash].empty()) {
+                lock_wait_queue.erase(record_hash);
+            }
+        }
+    }
 
     std::cout << "2PL: Transaksi " << transaction_id << " memperoleh X lock pada record "
               << record_hash << std::endl;
@@ -297,7 +410,11 @@ void TwoPhaseLockingCCManager::release_s_lock(int transaction_id, size_t record_
 void TwoPhaseLockingCCManager::release_x_lock(int transaction_id, size_t record_hash) {
     if (x_lock_table.count(record_hash) && x_lock_table[record_hash] == transaction_id) {
         x_lock_table.erase(record_hash);
-        transactions[transaction_id]->locked_records.erase(record_hash);
+
+        auto it = transactions.find(transaction_id);
+        if (it != transactions.end()) {
+            it->second->locked_records.erase(record_hash);
+        }
         std::cout << "2PL: Transaksi " << transaction_id << " melepaskan X lock pada record "
                   << record_hash << std::endl;
     }
@@ -332,7 +449,38 @@ void TwoPhaseLockingCCManager::release_all_locks(int transaction_id) {
         }
     }
 
+    // bersihkan transaction id dari antrian wait
+    auto it_queue = lock_wait_queue.begin();
+    while (it_queue != lock_wait_queue.end()) {
+        it_queue->second.remove(transaction_id);
+
+        // untuk kondisi antrian menjadi kosong
+        if (it_queue->second.empty()) {
+            it_queue = lock_wait_queue.erase(it_queue);
+        } else {
+            ++it_queue;
+        }
+    }
+
     std::cout << "2PL: Transaksi " << transaction_id << " melepaskan semua kunci." << std::endl;
+    std::cout << "isi dari wait-lock queue setelah release all locks:" << std::endl;
+    for (const auto& pair : lock_wait_queue) {
+        std::cout << "Record " << pair.first << ": ";
+        for (int tid : pair.second) {
+            std::cout << tid << " ";
+        }
+        std::cout << std::endl;
+    }
 }
 
-}  // namespace mdbms::ccm
+TransactionStatus TwoPhaseLockingCCManager::get_transaction_status(int transaction_id) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+
+    if (transactions.find(transaction_id) == transactions.end()) {
+        return TransactionStatus::TERMINATED;
+    }
+
+    return transactions[transaction_id]->status;
+}  
+
+} // namespace mdbms::ccm

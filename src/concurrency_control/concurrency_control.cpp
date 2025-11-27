@@ -114,4 +114,8 @@ void ConcurrencyControlManager::end_transaction(int transaction_id) {
     cc_manager_->end_transaction(transaction_id);
 }
 
-}  // namespace mdbms::ccm
+TransactionStatus ConcurrencyControlManager::get_transaction_status(int transaction_id) {
+    return cc_manager_->get_transaction_status(transaction_id);
+}  
+
+} // namespace mdbms::ccm

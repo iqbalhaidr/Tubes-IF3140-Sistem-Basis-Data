@@ -200,4 +200,15 @@ void TimestampCCManager::end_transaction(int transaction_id) {
     transactions_.erase(transaction_id);
 }
 
-}  // namespace mdbms::ccm
+TransactionStatus TimestampCCManager::get_transaction_status(int transaction_id) {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    if (transactions_.find(transaction_id) == transactions_.end()) {
+        return TransactionStatus::TERMINATED;
+    }
+
+    return transactions_[transaction_id]->state;
+
+}  
+
+} // namespace mdbms::ccm
