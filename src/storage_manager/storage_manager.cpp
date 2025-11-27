@@ -1,6 +1,7 @@
 #include "storage_manager.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <any>
 #include <cstdio>
 #include <cstdint>
@@ -16,15 +17,19 @@
 
 namespace mdbms::sm {
 
-StorageEngine::StorageEngine() : data_dir_("data") {}
+StorageEngine::StorageEngine() : data_dir_("data") {
+    hash_index_engine = HashIndexEngine();
+}
 
-StorageEngine::StorageEngine(const std::string& data_dir) : data_dir_(data_dir) {}
+StorageEngine::StorageEngine(const std::string& data_dir) : data_dir_(data_dir) {
+    hash_index_engine = HashIndexEngine(data_dir);
+}
 
 Rows<Row> StorageEngine::read_block(const DataRetrieval& retrieval) {
     Rows<Row> result;
     TableSchema schema;
     try {
-        schema = getSchema(retrieval.table);
+        schema = get_table_schema(retrieval.table);
     } catch (const std::runtime_error& e) {
         std::cerr << "SM: Error - " << e.what() << std::endl;
         return result;
@@ -54,7 +59,7 @@ Rows<Row> StorageEngine::read_block(const DataRetrieval& retrieval) {
             }
         }
         if (cond_for_index) {
-            if (lookup_index(retrieval.table, retrieval.index_column, cond_for_index->operand, offsets)) {
+            if (hash_index_engine.lookup_index(retrieval.table, retrieval.index_column, cond_for_index->operand, offsets)) {
                 used_index = true;
             } else {
                 used_index = false; // fallback
@@ -65,7 +70,7 @@ Rows<Row> StorageEngine::read_block(const DataRetrieval& retrieval) {
     } else {
         //Search with index if there's equality condition
         if (eq_cond) {
-            if (lookup_index(retrieval.table, eq_cond->column, eq_cond->operand, offsets)) {
+            if (hash_index_engine.lookup_index(retrieval.table, eq_cond->column, eq_cond->operand, offsets)) {
                 used_index = true;
             } else {
                 used_index = false;
@@ -84,7 +89,7 @@ Rows<Row> StorageEngine::read_using_offsets(const DataRetrieval& retrieval, cons
     Rows<Row> result;
     TableSchema schema;
     try {
-        schema = getSchema(retrieval.table);
+        schema = get_table_schema(retrieval.table);
     } catch (const std::runtime_error& e) {
         std::cerr << "SM: Error - " << e.what() << std::endl;
         return result;
@@ -130,7 +135,7 @@ Rows<Row> StorageEngine::full_scan(const DataRetrieval& retrieval) {
     Rows<Row> result;
     TableSchema schema;
     try {
-        schema = getSchema(retrieval.table);
+        schema = get_table_schema(retrieval.table);
     } catch (const std::runtime_error& e) {
         std::cerr << "SM: Error - " << e.what() << std::endl;
         return result;
@@ -179,7 +184,7 @@ Rows<Row> StorageEngine::full_scan(const DataRetrieval& retrieval) {
 int StorageEngine::write_block(const DataWrite<Row>& write) {
     TableSchema schema;
     try {
-        schema = getSchema(write.table);
+        schema = get_table_schema(write.table);
     } catch (const std::runtime_error& e) {
         std::cerr << "SM: Error - " << e.what() << std::endl;
         return 0;
@@ -201,9 +206,9 @@ int StorageEngine::write_block(const DataWrite<Row>& write) {
         serialize_row(file, write.new_value, schema);
         file.close();
 
-        if (table_index.count(write.table)) {
-            std::string col = table_index[write.table];
-            update_index_after_insert(
+        if (hash_index_engine.table_index.count(write.table)) {
+            std::string col = hash_index_engine.table_index[write.table];
+            hash_index_engine.update_index_after_insert(
                 write.table, col, row_offset, write.new_value
             );
         }
@@ -244,9 +249,9 @@ int StorageEngine::write_block(const DataWrite<Row>& write) {
             }
             affected_rows++;
 
-            if (this->table_index.count(write.table)) {
-                std::string col = table_index[write.table];
-                update_index_after_update(
+            if (this->hash_index_engine.table_index.count(write.table)) {
+                std::string col = hash_index_engine.table_index[write.table];
+                hash_index_engine.update_index_after_update(
                     write.table, col, current_offset, old_row, new_row
                 );
             }
@@ -266,7 +271,7 @@ int StorageEngine::write_block(const DataWrite<Row>& write) {
 int StorageEngine::delete_block(const DataDeletion& deletion) {
     TableSchema schema;
     try {
-        schema = getSchema(deletion.table);
+        schema = get_table_schema(deletion.table);
     } catch (const std::runtime_error& e) {
         std::cerr << "SM: Error - " << e.what() << std::endl;
         return 0;
@@ -300,9 +305,9 @@ int StorageEngine::delete_block(const DataDeletion& deletion) {
 
         if (check_conditions(row, deletion.conditions)) {
             // Update Index
-            if (table_index.count(table)) {
-                std::string col = table_index[table];
-                update_index_after_delete(table, col, row_offset, row);
+            if (hash_index_engine.table_index.count(table)) {
+                std::string col = hash_index_engine.table_index[table];
+                hash_index_engine.update_index_after_delete(table, col, row_offset, row);
             }
 
             affected_rows++;
@@ -327,32 +332,9 @@ int StorageEngine::delete_block(const DataDeletion& deletion) {
     return affected_rows;
 }
 
-TableSchema StorageEngine::getSchema(const std::string& table) {
-    // Hardcoded untuk testing
-    if (table == "Student") {
-        TableSchema schema;
-        schema.table_name = "Student";
-        schema.column_names = {"StudentID", "FullName", "GPA"};
-        schema.column_types = {DataType::INTEGER, DataType::VARCHAR, DataType::FLOAT};
-        schema.column_sizes = {0, 50, 0};
-        schema.primary_key = "StudentID";
-        return schema;
-    }
-    if (table == "Course") {
-        TableSchema schema;
-        schema.table_name = "Course";
-        schema.column_names = {"CourseID", "Year", "CourseName"};
-        schema.column_types = {DataType::INTEGER, DataType::INTEGER, DataType::VARCHAR};
-        schema.column_sizes = {0, 0, 50};
-        schema.primary_key = "CourseID";
-        return schema;
-    }
-    throw std::runtime_error("Skema tidak ditemukan untuk tabel: " + table);
-}
-
 // belom ada pengecekan buat apakah size valid, primary key valid, etc, blom ada pengecekan pokoknya, 
 // not sure we need one but just keep that in mind
-TableSchema StorageEngine::read_schema(const std::string& table) {
+TableSchema StorageEngine::get_table_schema(const std::string& table) {
     std::string schema_filename = data_dir_ + "/" + table + ".schema";
     std::ifstream infile(schema_filename, std::ios::binary);
 
@@ -372,14 +354,14 @@ TableSchema StorageEngine::read_schema(const std::string& table) {
     }
     
     for (uint16_t i = 0; i < columns_len; i++) {
-        // read column's name's length
+        
         uint32_t col_name_len;
         infile.read(reinterpret_cast<char*>(&col_name_len), sizeof(col_name_len));
         if (infile.gcount() != sizeof(col_name_len) || !infile) {
             std::cerr << "SM: Error membaca panjang nama kolom pada file schema " << table << std::endl;
             throw std::runtime_error("File skema korup untuk tabel: " + table);
         }
-        // read column's name
+        
         std::string column_name(col_name_len, '\0');
         infile.read(&column_name[0], col_name_len);
         if (infile.gcount() != static_cast<std::streamsize>(col_name_len) || !infile) {
@@ -387,7 +369,7 @@ TableSchema StorageEngine::read_schema(const std::string& table) {
             throw std::runtime_error("File skema korup untuk tabel: " + table);
         }
         result.column_names.push_back(column_name);
-        // read column's data type
+        
         uint8_t column_type;
         infile.read(reinterpret_cast<char*>(&column_type), sizeof(column_type));
         if (infile.gcount() != sizeof(column_type) || !infile) {
@@ -395,7 +377,7 @@ TableSchema StorageEngine::read_schema(const std::string& table) {
             throw std::runtime_error("File skema korup untuk tabel: " + table);
         }
         result.column_types.push_back(static_cast<DataType>(column_type));
-        // read column's size
+        
         uint32_t column_size;
         infile.read(reinterpret_cast<char*>(&column_size), sizeof(column_size));
         if (infile.gcount() != sizeof(column_size) || !infile) {
@@ -404,14 +386,13 @@ TableSchema StorageEngine::read_schema(const std::string& table) {
         }
         result.column_sizes.push_back(column_size);
     }
-    // read table's primary key length
     uint32_t primary_key_len;
     infile.read(reinterpret_cast<char*>(&primary_key_len), sizeof(primary_key_len));
     if (infile.gcount() != sizeof(primary_key_len) || !infile) {
         std::cerr << "SM: Error membaca panjang nama primary key pada file schema " << table << std::endl;
         throw std::runtime_error("File skema korup untuk tabel: " + table);
     }
-    // read primary key's name
+
     std::string primary_key(primary_key_len, '\0');
     infile.read(&primary_key[0], primary_key_len);
     if (infile.gcount() != static_cast<std::streamsize>(primary_key_len) || !infile) {
@@ -424,23 +405,77 @@ TableSchema StorageEngine::read_schema(const std::string& table) {
     return result;
 }
 
-void StorageEngine::create_schema(const TableSchema& schema) {
+bool StorageEngine::create_table(const TableSchema& schema) {
     std::string schema_filename = data_dir_ + "/" + schema.table_name + ".schema";
-    std::string tables_filename = data_dir_ + "/tables.meta";
     std::ofstream outfile(schema_filename, std::ios::binary);
-    std::fstream tables_iofile(tables_filename, std::ios::in | std::ios::out |std::ios::binary);
-
     if (!outfile.is_open()) {
         std::cerr << "SM: Gagal membuka file schema untuk tabel: " << schema.table_name << std::endl;
         throw std::runtime_error("Gagal membuka file schema");
     }
-    if (!tables_iofile.is_open()) {
-        std::cerr << "SM: Gagal membuka file tables.meta" << std::endl;
-        throw std::runtime_error("Gagal membuka file tables.meta");
+
+    // update tables.meta
+    if (!check_and_update_tables_metadata(schema)) return false;
+    
+    // write number of columns (aint no way number of columns exceed 2^16)
+    uint16_t columns_len = schema.column_names.size();
+    outfile.write(reinterpret_cast<const char*>(&columns_len), sizeof(columns_len));
+    if (!outfile) {
+        std::cerr << "SM: Error menulis jumlah kolom ke file." << std::endl;
+        throw std::runtime_error("Gagal menulis jumlah kolom ke file");
     }
 
-    // creating tables metadata that have all the tables name
-    if (tables_iofile.tellg()) { // if its the first table in a database
+    for (int i = 0; i < columns_len; i++) {
+        uint32_t col_name_len = static_cast<uint32_t>(schema.column_names[i].length());
+        outfile.write(reinterpret_cast<const char*>(&col_name_len), sizeof(col_name_len));
+        if (!outfile) {
+            std::cerr << "SM: Error menulis panjang nama kolom ke file." << std::endl;
+            throw std::runtime_error("Gagal menulis panjang nama kolom ke file");
+        }
+        outfile.write(schema.column_names[i].c_str(), col_name_len);
+        if (!outfile) {
+            std::cerr << "SM: Error menulis nama kolom ke file." << std::endl;
+            throw std::runtime_error("Gagal menulis nama kolom ke file");
+        }
+        uint8_t column_type = static_cast<uint8_t>(schema.column_types[i]);
+        outfile.write(reinterpret_cast<const char*>(&column_type), sizeof(column_type));
+        if (!outfile) {
+            std::cerr << "SM: Error menulis tipe data kolom ke file." << std::endl;
+            throw std::runtime_error("Gagal menulis tipe data kolom ke file");
+        }
+        uint32_t column_size = static_cast<uint32_t>(schema.column_sizes[i]);
+        outfile.write(reinterpret_cast<const char*>(&column_size), sizeof(column_size));
+        if (!outfile) {
+            std::cerr << "SM: Error menulis panjang nama kolom ke file." << std::endl;
+            throw std::runtime_error("Gagal menulis panjang nama kolom ke file");
+        }
+    }
+    uint32_t primary_key_len = static_cast<uint32_t>(schema.primary_key.length());
+    outfile.write(reinterpret_cast<const char*>(&primary_key_len), sizeof(primary_key_len));
+    if (!outfile) {
+        std::cerr << "SM: Error menulis panjang nama primary key ke file." << std::endl;
+        throw std::runtime_error("Gagal menulis panjang nama primary key ke file");
+    }
+    outfile.write(schema.primary_key.c_str(), primary_key_len);
+    if (!outfile) {
+        std::cerr << "SM: Error menulis nama primary key ke file." << std::endl;
+        throw std::runtime_error("Gagal menulis nama primary key ke file");
+    }
+    outfile.close();
+    return true;
+}
+
+// chech if table exist if so update tables.meta
+bool StorageEngine::check_and_update_tables_metadata(const TableSchema& schema) {
+    std::string tables_in_filename = data_dir_ + "/tables.meta";
+    std::string tables_out_filename = data_dir_ + "/tables_temp.meta";
+
+    if (!std::filesystem::exists(tables_in_filename)) { // if its the first table in a database
+        std::ofstream tables_iofile(tables_in_filename, std::ios::binary);
+        if (!tables_iofile.is_open()) {
+            std::cerr << "SM: Gagal membuka file tables.meta" << std::endl;
+            throw std::runtime_error("Gagal membuka file tables.meta");
+        }
+
         uint16_t tables_len = 1;
         tables_iofile.write(reinterpret_cast<const char*>(&tables_len), sizeof(tables_len));
         if (!tables_iofile) {
@@ -458,90 +493,189 @@ void StorageEngine::create_schema(const TableSchema& schema) {
             std::cerr << "SM: Error menulis nama kolom ke file." << std::endl;
             throw std::runtime_error("Gagal menulis nama kolom ke file");
         }
+
+        tables_iofile.close();
+        return true;
     }
     else {
-        // read and update tables len
+        std::ifstream tables_infile(tables_in_filename, std::ios::binary);
+        std::ofstream tables_outfile(tables_out_filename, std::ios::binary);
+        bool result = true;
+
+
+        if (!tables_infile.is_open()) {
+            std::cerr << "SM: Gagal membuka file tables.meta" << std::endl;
+            throw std::runtime_error("Gagal membuka file tables.meta");
+        }
+        if (!tables_outfile.is_open()) {
+            std::cerr << "SM: Gagal membuka file tables_temp.meta" << std::endl;
+            throw std::runtime_error("Gagal membuka file tables_temp.meta");
+        }
+        
+
+        // read existing tables
         uint16_t tables_len;
-        tables_iofile.read(reinterpret_cast<char*>(&tables_len), sizeof(tables_len));
-        if (tables_iofile.gcount() != sizeof(tables_len) || !tables_iofile) {
-            std::cerr << "SM: Error membaca panjang nama table pada file tables.meta" << std::endl;
+        tables_infile.read(reinterpret_cast<char*>(&tables_len), sizeof(tables_len));
+        if (tables_infile.gcount() != sizeof(tables_len) || !tables_infile) {
+            std::cerr << "SM: Error membaca jumlah nama table pada file tables.meta" << std::endl;
             throw std::runtime_error("File tables.meta korup dan gagal dibaca");
         }
-        tables_iofile.clear(); // clear flag before changing to write
-        tables_iofile.seekp(0, std::ios_base::beg);
-        tables_len += 1; // add one table
-        tables_iofile.write(reinterpret_cast<const char*>(&tables_len), sizeof(tables_len));
-        if (!tables_iofile) {
+
+        std::vector<std::string> tables_name;
+        for (int i = 0; i < tables_len; i++) {
+            uint32_t table_name_len;
+            tables_infile.read(reinterpret_cast<char*>(&table_name_len), sizeof(table_name_len));
+            if (tables_infile.gcount() != sizeof(table_name_len) || !tables_infile) {
+                std::cerr << "SM: Error membaca panjang nama tabel pada file tables.meta" << std::endl;
+                throw std::runtime_error("File skema korup untuk tables.meta");
+            }
+            
+            std::string column_name(table_name_len, '\0');
+            tables_infile.read(&column_name[0], table_name_len);
+            if (tables_infile.gcount() != static_cast<std::streamsize>(table_name_len) || !tables_infile) {
+                std::cerr << "SM: Error membaca nama tabel pada file tables.meta" << std::endl;
+                throw std::runtime_error("File skema korup untuk tables.meta");
+            }
+            tables_name.push_back(column_name);
+        }
+
+        // add table
+        auto it = std::find(tables_name.begin(), tables_name.end(), schema.table_name);
+        if (it != tables_name.end()) {
+            result = false;
+        }
+        else {
+            tables_name.push_back(schema.table_name);
+            tables_len += 1;
+        }
+
+        tables_outfile.write(reinterpret_cast<const char*>(&tables_len), sizeof(tables_len));
+        if (!tables_outfile) {
             std::cerr << "SM: Error menulis nama tabel ke file tables.meta" << std::endl;
             throw std::runtime_error("Gagal menulis nama tabel ke file tables.meta");
         }
 
-        // write tables name
-        tables_iofile.seekp(0, std::ios_base::end);
-        uint32_t table_name_len = static_cast<uint32_t>(schema.table_name.length());
-        tables_iofile.write(reinterpret_cast<const char*>(&table_name_len), sizeof(table_name_len));
-        if (!tables_iofile) {
-            std::cerr << "SM: Error menulis panjang nama kolom ke file." << std::endl;
-            throw std::runtime_error("Gagal menulis panjang nama kolom ke file");
+        for (auto& table_name : tables_name) {
+            uint32_t table_name_len = static_cast<uint32_t>(table_name.length());
+            tables_outfile.write(reinterpret_cast<const char*>(&table_name_len), sizeof(table_name_len));
+            if (!tables_outfile) {
+                std::cerr << "SM: Error menulis panjang nama kolom ke file." << std::endl;
+                throw std::runtime_error("Gagal menulis panjang nama kolom ke file");
+            }
+            tables_outfile.write(table_name.c_str(), table_name_len);
+            if (!tables_outfile) {
+                std::cerr << "SM: Error menulis nama kolom ke file." << std::endl;
+                throw std::runtime_error("Gagal menulis nama kolom ke file");
+            }
         }
-        tables_iofile.write(schema.table_name.c_str(), table_name_len);
-        if (!tables_iofile) {
-            std::cerr << "SM: Error menulis nama kolom ke file." << std::endl;
-            throw std::runtime_error("Gagal menulis nama kolom ke file");
-        }
-    }
-    tables_iofile.close();
 
-    // write number of columns (aint no way number of columns exceed 2^16)
-    uint16_t columns_len = schema.column_names.size();
-    outfile.write(reinterpret_cast<const char*>(&columns_len), sizeof(columns_len));
-    if (!outfile) {
-        std::cerr << "SM: Error menulis jumlah kolom ke file." << std::endl;
-        throw std::runtime_error("Gagal menulis jumlah kolom ke file");
+        tables_infile.close();
+        tables_outfile.close();
+
+        if (std::remove(tables_in_filename.c_str()) != 0) {
+            std::perror("SM: Error deleting data file when deleting old tables.meta");
+            throw std::runtime_error("SM: Error deleting data file when deleting old tables.meta");
+        }
+        std::rename(tables_out_filename.c_str(), tables_in_filename.c_str());
+        return result;
+    }
+}
+
+bool StorageEngine::delete_table(const TableSchema& schema) {
+    std::string schema_filename = data_dir_ + "/" + schema.table_name + ".schema";
+    std::string data_filename = data_dir_ + "/" + schema.table_name + ".dat";
+    std::string tables_in_filename = data_dir_ + "/tables.meta";
+    std::string tables_out_filename = data_dir_ + "/tables_temp.meta";
+
+    std::ifstream tables_infile(tables_in_filename, std::ios::binary);
+    std::ofstream tables_outfile(tables_out_filename, std::ios::binary);
+
+    bool result = true;
+
+    if (!tables_infile.is_open()) {
+        std::cerr << "SM: Gagal membuka file tables.meta" << std::endl;
+        throw std::runtime_error("Gagal membuka file tables.meta");
+    }
+    if (!tables_outfile.is_open()) {
+        std::cerr << "SM: Gagal membuka file tables_temp.meta" << std::endl;
+        throw std::runtime_error("Gagal membuka file tables_temp.meta");
+    }
+    
+
+    // read existing tables
+    uint16_t tables_len;
+    tables_infile.read(reinterpret_cast<char*>(&tables_len), sizeof(tables_len));
+    if (tables_infile.gcount() != sizeof(tables_len) || !tables_infile) {
+        std::cerr << "SM: Error membaca jumlah nama table pada file tables.meta" << std::endl;
+        throw std::runtime_error("File tables.meta korup dan gagal dibaca");
     }
 
-    for (int i = 0; i < columns_len; i++) {
-        // write column's name's length
-        uint32_t col_name_len = static_cast<uint32_t>(schema.column_names[i].length());
-        outfile.write(reinterpret_cast<const char*>(&col_name_len), sizeof(col_name_len));
-        if (!outfile) {
-            std::cerr << "SM: Error menulis panjang nama kolom ke file." << std::endl;
-            throw std::runtime_error("Gagal menulis panjang nama kolom ke file");
+    std::vector<std::string> tables_name;
+    for (int i = 0; i < tables_len; i++) {
+        uint32_t table_name_len;
+        tables_infile.read(reinterpret_cast<char*>(&table_name_len), sizeof(table_name_len));
+        if (tables_infile.gcount() != sizeof(table_name_len) || !tables_infile) {
+            std::cerr << "SM: Error membaca panjang nama tabel pada file tables.meta" << std::endl;
+            throw std::runtime_error("File skema korup untuk tables.meta");
         }
-        // write column's name
-        outfile.write(schema.column_names[i].c_str(), col_name_len);
-        if (!outfile) {
-            std::cerr << "SM: Error menulis nama kolom ke file." << std::endl;
-            throw std::runtime_error("Gagal menulis nama kolom ke file");
+        
+        std::string column_name(table_name_len, '\0');
+        tables_infile.read(&column_name[0], table_name_len);
+        if (tables_infile.gcount() != static_cast<std::streamsize>(table_name_len) || !tables_infile) {
+            std::cerr << "SM: Error membaca nama tabel pada file tables.meta" << std::endl;
+            throw std::runtime_error("File skema korup untuk tables.meta");
         }
-        // write column's data type according to the enum
-        uint8_t column_type = static_cast<uint8_t>(schema.column_types[i]);
-        outfile.write(reinterpret_cast<const char*>(&column_type), sizeof(column_type));
-        if (!outfile) {
-            std::cerr << "SM: Error menulis tipe data kolom ke file." << std::endl;
-            throw std::runtime_error("Gagal menulis tipe data kolom ke file");
+        tables_name.push_back(column_name);
+    }
+
+    // remove table
+    auto it = std::find(tables_name.begin(), tables_name.end(), schema.table_name);
+    if (it == tables_name.end()) result = false; // table doesnt exist
+    else {
+        tables_name.erase(it);
+        tables_len -= 1;
+    }
+
+    if (tables_len != 0) {
+        tables_outfile.write(reinterpret_cast<const char*>(&tables_len), sizeof(tables_len));
+        if (!tables_outfile) {
+            std::cerr << "SM: Error menulis nama tabel ke file tables.meta" << std::endl;
+            throw std::runtime_error("Gagal menulis nama tabel ke file tables.meta");
         }
-        // write column's size
-        uint32_t column_size = static_cast<uint32_t>(schema.column_sizes[i]);
-        outfile.write(reinterpret_cast<const char*>(&column_size), sizeof(column_size));
-        if (!outfile) {
-            std::cerr << "SM: Error menulis panjang nama kolom ke file." << std::endl;
-            throw std::runtime_error("Gagal menulis panjang nama kolom ke file");
+
+        for (auto& table_name : tables_name) {
+            uint32_t table_name_len = static_cast<uint32_t>(table_name.length());
+            tables_outfile.write(reinterpret_cast<const char*>(&table_name_len), sizeof(table_name_len));
+            if (!tables_outfile) {
+                std::cerr << "SM: Error menulis panjang nama kolom ke file." << std::endl;
+                throw std::runtime_error("Gagal menulis panjang nama kolom ke file");
+            }
+            tables_outfile.write(table_name.c_str(), table_name_len);
+            if (!tables_outfile) {
+                std::cerr << "SM: Error menulis nama kolom ke file." << std::endl;
+                throw std::runtime_error("Gagal menulis nama kolom ke file");
+            }
         }
     }
-    // write column's primary key
-    uint32_t primary_key_len = static_cast<uint32_t>(schema.primary_key.length());
-    outfile.write(reinterpret_cast<const char*>(&primary_key_len), sizeof(primary_key_len));
-    if (!outfile) {
-        std::cerr << "SM: Error menulis panjang nama primary key ke file." << std::endl;
-        throw std::runtime_error("Gagal menulis panjang nama primary key ke file");
+
+    tables_infile.close();
+    tables_outfile.close();
+
+    // delete table data dan schema
+    if (std::remove(schema_filename.c_str()) != 0) {
+        std::perror("SM: Error deleting schema file when deleting table");
+        throw std::runtime_error("SM: Error deleting schema file when deleting tabl");
     }
-    outfile.write(schema.primary_key.c_str(), primary_key_len);
-    if (!outfile) {
-        std::cerr << "SM: Error menulis nama primary key ke file." << std::endl;
-        throw std::runtime_error("Gagal menulis nama primary key ke file");
+    if (std::remove(data_filename.c_str()) != 0) {
+        std::perror("SM: Error deleting data file when deleting table");
+        throw std::runtime_error("SM: Error deleting data file when deleting table");
     }
-    outfile.close();
+    if (std::remove(tables_in_filename.c_str()) != 0) {
+        std::perror("SM: Error deleting data file when deleting old tables.meta");
+        throw std::runtime_error("SM: Error deleting data file when deleting old tables.meta");
+    }
+    std::rename(tables_out_filename.c_str(), tables_in_filename.c_str());
+    return result;
 }
 
 std::map<std::string, Statistic> StorageEngine::get_stats() {
@@ -647,7 +781,7 @@ std::vector<TableSchema> StorageEngine::get_tables() {
 
     // read table schema
     for (const std::string& table : tables) {
-        result.push_back(read_schema(table));
+        result.push_back(get_table_schema(table));
     }
 
     tables_infile.close();
@@ -839,580 +973,26 @@ bool StorageEngine::check_conditions(const Row& row, const std::vector<Condition
     return true; 
 }
 
-void StorageEngine::update_index_after_insert(const std::string& table, const std::string& column, int64_t row_offset, const Row& row) {
-    auto it = row.columns.find(column);
-    if (it == row.columns.end()) return;
-
-    std::string keystr;
-    int32_t iv; float fv;
-    const std::any &v = it->second;
-
-    if (any_to_string(v, keystr)) {}
-    else if (any_to_int32(v, iv)) keystr = std::to_string(iv);
-    else if (any_to_float(v, fv)) keystr = std::to_string(fv);
-    else return;
-
-    std::string idxfile = data_dir_ + "/" + table + "." + column + ".hashidx";
-    std::fstream out(idxfile, std::ios::binary | std::ios::in | std::ios::out);
-    if (!out.is_open()) return;
-
-    // Skip header
-    out.seekg(0);
-    char header[4];
-    out.read(header, 4);
-
-    uint8_t idx_type; out.read((char*)&idx_type, 1);
-    uint8_t dtype;    out.read((char*)&dtype, 1);
-
-    uint32_t bucket_count;
-    out.read((char*)&bucket_count, 4);
-
-    // Directory start
-    int64_t dir_start = out.tellg();
-
-    std::vector<int64_t> bucket_pos(bucket_count);
-    for (uint32_t i = 0; i < bucket_count; i++)
-        out.read((char*)&bucket_pos[i], 8);
-
-    // Determine bucket
-    size_t h = std::hash<std::string>{}(keystr);
-    uint32_t bucket = h % bucket_count;
-
-    int64_t pos = bucket_pos[bucket];
-
-    // If empty bucket, create new bucket at end
-    if (pos == 0) {
-        out.seekp(0, std::ios::end);
-        pos = out.tellp();
-        bucket_pos[bucket] = pos;
-
-        uint32_t key_count = 1;
-        out.write((char*)&key_count, 4);
-
-        uint32_t len = keystr.size();
-        out.write((char*)&len, 4);
-        out.write(keystr.data(), len);
-
-        uint32_t cnt = 1;
-        out.write((char*)&cnt, 4);
-        out.write((char*)&row_offset, 8);
-    }
-    else {
-        out.seekg(pos);
-
-        uint32_t key_count;
-        out.read((char*)&key_count, 4);
-
-        // Buffer bucket content
-        struct Item { std::string key; std::vector<int64_t> offs; };
-        std::vector<Item> items;
-
-        for (uint32_t i = 0; i < key_count; i++) {
-            uint32_t len;
-            out.read((char*)&len, 4);
-
-            std::string k(len, '\0');
-            out.read(&k[0], len);
-
-            uint32_t cnt;
-            out.read((char*)&cnt, 4);
-
-            std::vector<int64_t> offs(cnt);
-            for (uint32_t j = 0; j < cnt; j++)
-                out.read((char*)&offs[j], 8);
-
-            items.push_back({k, offs});
-        }
-
-        // Inject new offset
-        bool found = false;
-        for (auto& it : items) {
-            if (it.key == keystr) {
-                it.offs.push_back(row_offset);
-                found = true;
-                break;
-            }
-        }
-        if (!found) {
-            items.push_back({keystr, {row_offset}});
-            key_count++;
-        }
-
-        // Rewrite bucket
-        out.seekp(pos);
-
-        out.write((char*)&key_count, 4);
-        for (auto& it : items) {
-            uint32_t len = it.key.size();
-            out.write((char*)&len, 4);
-            out.write(it.key.data(), len);
-
-            uint32_t cnt = it.offs.size();
-            out.write((char*)&cnt, 4);
-            for (auto off : it.offs)
-                out.write((char*)&off, 8);
-        }
-    }
-
-    // Rewrite directory
-    out.seekp(dir_start);
-    for (auto p : bucket_pos)
-        out.write((char*)&p, 8);
-
-    out.close();
-}
-
-void StorageEngine::update_index_after_update(const std::string& table, const std::string& column, int64_t row_offset, const Row& old_row, const Row& new_row){
-    auto A = old_row.columns.at(column);
-    auto B = new_row.columns.at(column);
-
-    // Skip jika column yang diupdate tidak mempengaruhi index
-    if (A.type() == B.type()) {
-        if (A.type() == typeid(int)    && std::any_cast<int>(A) == std::any_cast<int>(B)) return;
-        if (A.type() == typeid(float)  && std::any_cast<float>(A) == std::any_cast<float>(B)) return;
-        if (A.type() == typeid(std::string) && std::any_cast<std::string>(A) == std::any_cast<std::string>(B)) return;
-    }
-
-    // Key changed -> remove + insert
-    update_index_after_delete(table, column, row_offset, old_row);
-    update_index_after_insert(table, column, row_offset, new_row);
-}
-
-void StorageEngine::update_index_after_delete(const std::string& table, const std::string& column, int64_t row_offset, const Row& old_row) {
-    auto it = old_row.columns.find(column);
-    if (it == old_row.columns.end()) return;
-
-    std::string keystr;
-    int32_t iv; 
-    float fv;
-
-    const std::any &v = it->second;
-
-    if (any_to_string(v, keystr)) {}
-    else if (any_to_int32(v, iv)) keystr = std::to_string(iv);
-    else if (any_to_float(v, fv)) keystr = std::to_string(fv);
-    else return;
-
-    std::string idxfile = data_dir_ + "/" + table + "." + column + ".hashidx";
-    std::fstream io(idxfile, std::ios::binary | std::ios::in | std::ios::out);
-    if (!io.is_open()) return;
-
-    // Readh Header
-    io.seekg(0);
-    char magic[4];
-    io.read(magic, 4);
-
-    uint8_t idx_type;
-    io.read((char*)&idx_type, 1);
-
-    uint8_t dtype;
-    io.read((char*)&dtype, 1);
-
-    uint32_t bucket_count;
-    io.read((char*)&bucket_count, 4);
-
-    int64_t dir_start = io.tellg();
-
-    std::vector<int64_t> bucket_pos(bucket_count);
-    for (uint32_t i = 0; i < bucket_count; i++)
-        io.read((char*)&bucket_pos[i], 8);
-
-    // Compute bucket
-    size_t h = std::hash<std::string>{}(keystr);
-    uint32_t bucket = h % bucket_count;
-
-    int64_t pos = bucket_pos[bucket];
-    if (pos == 0) {
-        io.close();
-        return; // bucket kosong
-    }
-
-    // Read Bucket Content
-    io.seekg(pos);
-
-    uint32_t key_count;
-    io.read((char*)&key_count, 4);
-
-    struct Item { std::string key; std::vector<int64_t> offs; };
-    std::vector<Item> items;
-
-    for (uint32_t i = 0; i < key_count; i++) {
-        uint32_t len;
-        io.read((char*)&len, 4);
-
-        std::string k(len, '\0');
-        io.read(&k[0], len);
-
-        uint32_t cnt;
-        io.read((char*)&cnt, 4);
-
-        std::vector<int64_t> offs(cnt);
-        for (uint32_t j = 0; j < cnt; j++)
-            io.read((char*)&offs[j], 8);
-
-        items.push_back({ k, offs });
-    }
-
-    // Delete Offset
-    bool modified = false;
-
-    for (auto &it : items) {
-        if (it.key == keystr) {
-            auto &vec = it.offs;
-
-            vec.erase(
-                std::remove(vec.begin(), vec.end(), row_offset),
-                vec.end()
-            );
-
-            modified = true;
-
-            if (vec.empty()) {
-                items.erase(
-                    std::remove_if(
-                        items.begin(), items.end(),
-                        [&](const Item& x){ return x.key == keystr; }
-                    ),
-                    items.end()
-                );
-            }
-            break;
-        }
-    }
-
-    if (!modified) {
-        io.close();
-        return; // tidak berubah
-    }
-
-    // Rewrite Bucket
-    io.seekp(pos, std::ios::beg);
-
-    uint32_t new_key_count = items.size();
-    io.write((char*)&new_key_count, 4);
-
-    for (auto &it : items) {
-        uint32_t len = it.key.size();
-        io.write((char*)&len, 4);
-        io.write(it.key.data(), len);
-
-        uint32_t cnt = it.offs.size();
-        io.write((char*)&cnt, 4);
-
-        for (auto off : it.offs)
-            io.write((char*)&off, 8);
-    }
-
-    // Rewrite Directory
-    io.seekp(dir_start);
-    for (auto p : bucket_pos)
-        io.write((char*)&p, 8);
-
-    io.close();
-}
-
-// Implementasi Indexing
 void StorageEngine::set_index(const std::string& table, const std::string& column, const IndexType index_type) {
-    table_index[table] = column;
-    table_index_type[table] = index_type;
+    hash_index_engine.table_index[table] = column;
+    hash_index_engine.table_index_type[table] = index_type;
 
     TableSchema schema;
     try {
-        schema = getSchema(table);
+        schema = get_table_schema(table);
     } catch (const std::exception &e) {
         std::cerr << "SM: Schema error.\n";
         return;
     }
 
     if (index_type == IndexType::HASH) {
-        build_hash_index(schema, table, column);
+        hash_index_engine.build_hash_index(schema, table, column);
     } else {
         // TODO: call b+tree here
     };
 }
 
-static constexpr uint32_t HASH_BUCKET_COUNT = 1024;
-
-void StorageEngine::build_hash_index(const TableSchema& schema, const std::string& table, const std::string& column) {
-    std::string datafile = data_dir_ + "/" + table + ".dat";
-    std::string idxfile  = data_dir_ + "/" + table + "." + column + ".hashidx";
-
-    std::ifstream file(datafile, std::ios::binary);
-    if (!file.is_open()) {
-        std::cerr << "SM: Gagal membuka " << datafile << " untuk index.\n";
-        return;
-    }
-
-    // Find column
-    int col_idx = -1;
-    DataType type = DataType::VARCHAR;
-
-    for (size_t i = 0; i < schema.column_names.size(); ++i) {
-        if (schema.column_names[i] == column) {
-            col_idx = i;
-            type    = schema.column_types[i];
-            break;
-        }
-    }
-
-    if (col_idx == -1) {
-        std::cerr << "SM: Kolom tidak ditemukan.\n";
-        return;
-    }
-
-    // Buckets
-    std::vector<std::unordered_map<std::string, std::vector<int64_t>>> buckets(HASH_BUCKET_COUNT);
-
-    while (true) {
-        std::streampos pos = file.tellg();
-        if (!file.good()) break;
-
-        Row row = deserialize_row(file, schema);
-        if (!file.good()) break;
-
-        auto it = row.columns.find(column);
-        if (it == row.columns.end()) continue;
-
-        std::string keystr;
-        int32_t iv; float fv;
-
-        const std::any &v = it->second;
-
-        if (any_to_string(v, keystr)) {
-            // ok
-        } else if (any_to_int32(v, iv)) {
-            keystr = std::to_string(iv);
-        } else if (any_to_float(v, fv)) {
-            keystr = std::to_string(fv);
-        } else {
-            continue;
-        }
-
-        size_t h = std::hash<std::string>{}(keystr);
-        uint32_t bucket_id = h % HASH_BUCKET_COUNT;
-
-        buckets[bucket_id][keystr].push_back((int64_t)pos);
-    }
-
-    file.close();
-
-    // Make file index
-    std::ofstream out(idxfile, std::ios::binary | std::ios::trunc);
-    if (!out.is_open()) {
-        std::cerr << "SM: Tidak bisa membuat index file.\n";
-        return;
-    }
-
-    // HEADER
-    out.write("HIDX", 4);
-
-    uint8_t idx_type = 0;    // 0 = hash
-    out.write((char*)&idx_type, 1);
-
-    uint8_t dtype = (type == DataType::INTEGER) ? 0 :
-                    (type == DataType::FLOAT)   ? 1 : 2;
-    out.write((char*)&dtype, 1);
-
-    uint32_t bucket_count = HASH_BUCKET_COUNT;
-    out.write((char*)&bucket_count, 4);
-
-    // Bucket directory
-    std::vector<int64_t> bucket_pos(bucket_count, 0);
-    int64_t dir_start = out.tellp();
-
-    for (uint32_t i = 0; i < bucket_count; i++) {
-        int64_t zero = 0;
-        out.write((char*)&zero, 8);
-    }
-
-    // BUCKET DATA
-    for (uint32_t b = 0; b < bucket_count; b++) {
-        if (buckets[b].empty()) continue;
-
-        bucket_pos[b] = (int64_t)out.tellp();
-
-        uint32_t key_count = buckets[b].size();
-        out.write((char*)&key_count, 4);
-
-        for (auto &kv : buckets[b]) {
-            const std::string &key = kv.first;
-            const std::vector<int64_t> &offs = kv.second;
-
-            uint32_t len = key.size();
-            out.write((char*)&len, 4);
-            out.write(key.data(), len);
-
-            uint32_t cnt = offs.size();
-            out.write((char*)&cnt, 4);
-
-            for (int64_t o : offs) {
-                out.write((char*)&o, 8);
-            }
-        }
-    }
-
-    // UPDATE DIRECTORY
-    int64_t endpos = out.tellp();
-    out.seekp(dir_start);
-
-    for (auto p : bucket_pos) {
-        out.write((char*)&p, 8);
-    }
-
-    out.seekp(endpos);
-    out.close();
-
-    std::cout << "SM: Hash index selesai: " << idxfile << "\n";
-}
-
-
-bool StorageEngine::lookup_index(const std::string& table, const std::string& column, const std::any& operand, std::vector<int64_t>& out_offsets) {
-    // Check which index file exists for the table.column
-    std::string hashfile = data_dir_ + "/" + table + "." + column + ".hashidx";
-    std::ifstream htest(hashfile, std::ios::binary);
-    if (htest.is_open()) {
-        htest.close();
-        return lookup_hash(table, column, operand, out_offsets);
-    }
-
-    std::string bptfile = data_dir_ + "/" + table + "." + column + ".bpt";
-    std::ifstream btest(bptfile, std::ios::binary);
-    if (btest.is_open()) {
-        btest.close();
-        // TO DO: return lookup for b+tree
-    }
-    return false; // no index
-}
-
-bool StorageEngine::lookup_hash(const std::string& table, const std::string& column, const std::any& operand, std::vector<int64_t>& out_offsets) {
-    out_offsets.clear();
-    std::string idxfile = data_dir_ + "/" + table + "." + column + ".hashidx";
-    std::ifstream in(idxfile, std::ios::binary);
-    if (!in.is_open()) {
-        return false;
-    }
-
-    // Read header
-    char magic[4];
-    in.read(magic, 4);
-    if (in.gcount() != 4 || std::string(magic, 4) != "HIDX") {
-        in.close();
-        return false;
-    }
-
-    uint8_t index_type_id = 0;
-    in.read(reinterpret_cast<char*>(&index_type_id), 1);
-    if (!in) { in.close(); return false; }
-
-    uint8_t dtype = 2;
-    in.read(reinterpret_cast<char*>(&dtype), 1);
-    if (!in) { in.close(); return false; }
-
-    uint32_t bucket_count = 0;
-    in.read(reinterpret_cast<char*>(&bucket_count), 4);
-    if (!in) { in.close(); return false; }
-    if (bucket_count == 0) { in.close(); return false; }
-
-    // Read directory
-    std::vector<int64_t> directory(bucket_count);
-    for (uint32_t i = 0; i < bucket_count; ++i) {
-        int64_t off = 0;
-        in.read(reinterpret_cast<char*>(&off), 8);
-        directory[i] = off;
-    }
-
-    // Convert operand to string key
-    std::string keystr;
-    if (!any_to_string(operand, keystr)) {
-        int32_t iv; float fv;
-        if (any_to_int32(operand, iv)) keystr = std::to_string(iv);
-        else if (any_to_float(operand, fv)) {
-            keystr = std::to_string(fv);
-        } else {
-            in.close();
-            return false;
-        }
-    }
-
-    // Compute bucket
-    size_t h = std::hash<std::string>{}(keystr);
-    uint32_t bucket_id = static_cast<uint32_t>(h % bucket_count);
-
-    int64_t bucket_pos = directory[bucket_id];
-    if (bucket_pos == 0) { in.close(); return false; } // empty bucket
-
-    // Seek to bucket
-    in.seekg(bucket_pos, std::ios::beg);
-    if (!in.good()) { in.close(); return false; }
-
-    // Read key_count
-    uint32_t key_count = 0;
-    in.read(reinterpret_cast<char*>(&key_count), 4);
-    if (!in) { in.close(); return false; }
-
-    for (uint32_t k = 0; k < key_count; ++k) {
-        uint32_t len = 0;
-        in.read(reinterpret_cast<char*>(&len), 4);
-        if (!in) { in.close(); return false; }
-
-        std::string kstr(len, '\0');
-        if (len > 0) in.read(&kstr[0], len);
-        if (!in) { in.close(); return false; }
-
-        uint32_t cnt = 0;
-        in.read(reinterpret_cast<char*>(&cnt), 4);
-        if (!in) { in.close(); return false; }
-
-        std::vector<int64_t> offsets(cnt);
-        for (uint32_t j = 0; j < cnt; ++j) {
-            in.read(reinterpret_cast<char*>(&offsets[j]), 8);
-            if (!in) { in.close(); return false; }
-        }
-
-        if (kstr == keystr) {
-            out_offsets = std::move(offsets);
-            in.close();
-            return true;
-        }
-    }
-
-    in.close();
-    return false; // not found in bucket
-}
-
-
-// Helper untuk Index
-bool StorageEngine::any_to_int32(const std::any &a, int32_t &out) {
-    if (!a.has_value()) return false;
-    try {
-        if (a.type() == typeid(int32_t)) { out = std::any_cast<int32_t>(a); return true; }
-        if (a.type() == typeid(int)) { out = static_cast<int32_t>(std::any_cast<int>(a)); return true; }
-        if (a.type() == typeid(int64_t)) { out = static_cast<int32_t>(std::any_cast<int64_t>(a)); return true; }
-        if (a.type() == typeid(uint32_t)) { out = static_cast<int32_t>(std::any_cast<uint32_t>(a)); return true; }
-    } catch (const std::bad_any_cast&) { return false; }
-    return false;
-}
-
-bool StorageEngine::any_to_float(const std::any &a, float &out) {
-    if (!a.has_value()) return false;
-    try {
-        if (a.type() == typeid(float)) { out = std::any_cast<float>(a); return true; }
-        if (a.type() == typeid(double)) { out = static_cast<float>(std::any_cast<double>(a)); return true; }
-    } catch (const std::bad_any_cast&) { return false; }
-    return false;
-}
-
-bool StorageEngine::any_to_string(const std::any &a, std::string &out) {
-    if (!a.has_value()) return false;
-    try {
-        if (a.type() == typeid(std::string)) { out = std::any_cast<std::string>(a); return true; }
-        if (a.type() == typeid(const char*)) { out = std::any_cast<const char*>(a); return true; }
-    } catch (const std::bad_any_cast&) { return false; }
-    return false;
-}
-
-// helper
-std::string to_string_any(const std::any& a) {
+std::string StorageEngine::to_string_any(const std::any& a) {
     if (a.type() == typeid(std::string)) return std::any_cast<std::string>(a);
     if (a.type() == typeid(const char*)) return std::string(std::any_cast<const char*>(a));
     if (a.type() == typeid(int)) return std::to_string(std::any_cast<int>(a));
@@ -1424,4 +1004,5 @@ std::string to_string_any(const std::any& a) {
 
     throw std::runtime_error("SM: unsupported type in helper function to_string_any");
 }
+
 } // namespace mdbms::sm

@@ -50,6 +50,26 @@ int main() {
 
     StorageEngine sm(test_dir);
 
+    // TEST 0: CREATE TABLE
+    std::cout << "\n--- TEST 0: CREATE TABLE ---\n";
+    TableSchema student_schema;
+    student_schema.table_name = "Student";
+    student_schema.column_names = {"StudentID", "FullName", "GPA"};
+    student_schema.column_types = {DataType::INTEGER, DataType::VARCHAR, DataType::FLOAT};
+    student_schema.column_sizes = {0, 50, 0};
+    student_schema.primary_key = "StudentID";
+    sm.create_table(student_schema);
+
+    TableSchema course_schema;
+    course_schema.table_name = "Course";
+    course_schema.column_names = {"CourseID", "Year", "CourseName"};
+    course_schema.column_types = {DataType::INTEGER, DataType::INTEGER, DataType::VARCHAR};
+    course_schema.column_sizes = {0, 0, 50};
+    course_schema.primary_key = "CourseID";
+    sm.create_table(course_schema);
+
+    std::cout << "Test 0 OK.\n";
+
     // TEST 1: INSERT
     std::cout << "\n--- TEST 1: INSERT ---\n";
 
@@ -394,6 +414,18 @@ int main() {
 
     std::cout << "Test 16 OK (index updated correctly after key update).\n";
 
+    // TEST 17: DROP Table
+    std::cout << "\n--- TEST 17: DROP TABLE ---\n";
+    sm.delete_table(student_schema);
+
+    rows_all = sm.read_block(read_all);
+    print_rows(rows_all);
+    assert(rows_all.rows_count == 0);
+
+    std::cout << "Test 17 OK (table dropped).\n";
+
     std::cout << "\n===== SEMUA TEST LULUS =====\n";
     return 0;
+
+    
 }
