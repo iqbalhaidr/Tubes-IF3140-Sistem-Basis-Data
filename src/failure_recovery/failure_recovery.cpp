@@ -98,13 +98,15 @@ void FailureRecoveryManager::write_log(const ExecutionResult& info) {
             }
         } else if (entry.operation == Operation::UPDATE) {
             // UPDATE: Old value di data[0], new value di data[1]
+            // Memastikan Query Processor mengirimkan 2 row (Old dan New Value) per log entry.
             if (info.data.data.size() >= 2) {
-                entry.old_value = info.data.data[0];  // First row is old value
-                entry.new_value = info.data.data[1];  // Second row is new value
-            } else if (info.data.data.size() == 1) {
-                // Fallback: if only one row, assume it's the new value
-                entry.new_value = info.data.data[0];
-                entry.old_value = Row();
+                entry.table_name = info.data.data[0].table_name; // Ambil table name dari Old Value
+                entry.old_value = info.data.data[0];             // First row is old value
+                entry.new_value = info.data.data[1];             // Second row is new value
+            } else {
+                std::cerr << "FRM Error: Log UPDATE (T" << info.transaction_id 
+                          << ") dibuang, tidak memiliki Old dan New Value yang lengkap (data.size() < 2)." << std::endl;
+                return;
             }
         } else if (entry.operation == Operation::DELETE) {
             if (!info.data.data.empty()) {
