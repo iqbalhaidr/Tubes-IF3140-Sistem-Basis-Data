@@ -54,7 +54,7 @@ FailureRecoveryManager::FailureRecoveryManager() {
     this->next_log_id = 1;
     this->next_checkpoint_id = 1;
     // path untuk menyimpan log file
-    this->log_file_path = "../data/wal.log";
+    this->log_file_path = "../data/wal.bin";
     std::cout << "FRM: Konstruktor FailureRecoveryManager dipanggil..." << std::endl;
     std::cout << "FRM: Log file path: " << this->log_file_path << std::endl;
 }
@@ -250,92 +250,6 @@ void FailureRecoveryManager::recover(const RecoverCriteria& criteria) {
     std::cout << "FRM: Recovery selesai. Total operasi yang di-UNDO: " << undo_count << std::endl;
 }
 
-std::string FailureRecoveryManager::any_to_string(const std::any& value) {
-    if (!value.has_value()) return "NULL";
-
-    try {
-        if (value.type() == typeid(int)) {
-            return std::to_string(std::any_cast<int>(value));
-        } else if (value.type() == typeid(float)) {
-            return std::to_string(std::any_cast<float>(value));
-        } else if (value.type() == typeid(std::string)) {
-            return std::any_cast<std::string>(value);
-        }
-    } catch (...) {
-        return "ERROR";
-    }
-    return "UNKNOWN_TYPE";
-}
-
-std::any FailureRecoveryManager::string_to_any(const std::string& str, DataType type) {
-    if (type == DataType::INTEGER) return std::stoi(str);
-    if (type == DataType::FLOAT) return std::stof(str);
-    return str;
-}
-
-std::string FailureRecoveryManager::row_to_string(const Row& row) {
-    if (row.row_id == -1 && row.columns.empty()) return "EMPTY"; 
-    
-    std::stringstream ss;
-
-    ss << row.row_id << "#";
-
-    ss << "{";
-    bool first = true;
-    for (const auto& [atr, val] : row.columns) {
-        if (!first) ss << ",";
-        ss << atr << ":" << any_to_string(val);
-        first = false;
-    }
-    ss << "}";
-
-    return ss.str();
-}
-
-Row FailureRecoveryManager::string_to_row(const std::string& row_string, const std::string& table_name) {
-    Row row;
-    row.table_name = table_name;
-
-    if (row_string == "EMPTY") {
-        row.row_id = -1;
-        return row;
-    }
-
-    std::stringstream ss(row_string);
-    std::string segment;
-    std::vector<std::string> parts;
-
-    size_t delimiter_pos = row_string.find('#'); // Cari pemisah ID dan Data
-    if (delimiter_pos == std::string::npos) {
-        row.row_id = -1; 
-        return row;
-    }
-
-    // Parse Row ID
-    std::string id_str = row_string.substr(0, delimiter_pos);
-    row.row_id = std::stoi(id_str);
-
-    // Parse Columns
-    std::string content = row_string.substr(delimiter_pos + 1);
-    content = content.substr(1, content.size() - 2);
-
-    std::stringstream content_ss(content);
-    std::string pair_str;
-    
-    while (std::getline(content_ss, pair_str, ',')) {
-        size_t kv_sep = pair_str.find(':');
-        
-        if (kv_sep != std::string::npos) {
-            std::string atr = pair_str.substr(0, kv_sep);
-            std::string val = pair_str.substr(kv_sep + 1);
-
-            row.columns[atr] = string_to_any(val, DataType::VARCHAR);
-        }
-    }
-
-    return row;
-}
-
 std::string FailureRecoveryManager::operation_to_string(Operation op) {
     switch (op) {
         case Operation::BEGIN: return "BEGIN";
@@ -349,109 +263,291 @@ std::string FailureRecoveryManager::operation_to_string(Operation op) {
     }
 }
 
-Operation FailureRecoveryManager::string_to_operation(const std::string& str) {
-    if (str == "BEGIN") return Operation::BEGIN;
-    if (str == "COMMIT") return Operation::COMMIT;
-    if (str == "ABORT") return Operation::ABORT;
-    if (str == "UPDATE") return Operation::UPDATE;
-    if (str == "INSERT") return Operation::INSERT;
-    if (str == "DELETE") return Operation::DELETE;
-    if (str == "CHECKPOINT") return Operation::CHECKPOINT;
-    return Operation::ABORT; // Default safe fallback
+// ===============================================================================================================================================
+// Constants for std::any type tagging
+const uint32_t TYPE_INT = 1;
+const uint32_t TYPE_FLOAT = 2;
+const uint32_t TYPE_STRING = 3;
+
+void FailureRecoveryManager::write_string(std::ofstream& out, const std::string& str) {
+    uint32_t len = static_cast<uint32_t>(str.size());
+    out.write(reinterpret_cast<const char*>(&len), sizeof(len));
+    out.write(str.c_str(), len);
 }
 
-std::string FailureRecoveryManager::serialize_log(const LogEntry& entry) {
-    std::stringstream ss;
+std::string FailureRecoveryManager::read_string(std::ifstream& in) {
+    uint32_t len;
+    in.read(reinterpret_cast<char*>(&len), sizeof(len));
 
-    ss << entry.log_id << "|";
-    ss << entry.transaction_id << "|";
-    ss << static_cast<long long>(entry.timestamp) << "|";
-    ss << operation_to_string(entry.operation) << "|";
-    ss << (entry.table_name.empty() ? "NON_TABLE" : entry.table_name) << "|";
-    ss << row_to_string(entry.old_value) << "|";
-    ss << row_to_string(entry.new_value) << "|";
-    ss << entry.query;
-
-    return ss.str();
+    std::string str;
+    str.resize(len);
+    in.read(&str[0], len);
+    return str;
 }
 
-LogEntry FailureRecoveryManager::deserialize_log(const std::string& serialized_log) {
+void FailureRecoveryManager::write_any(std::ofstream& out, const std::any& val) {
+    if (!val.has_value()) {
+        // Handle empty/null values if necessary, here we skip or throw
+        return; 
+    }
+
+    if (val.type() == typeid(int)) {
+        out.write(reinterpret_cast<const char*>(&TYPE_INT), sizeof(TYPE_INT));
+        int val_casted = std::any_cast<int>(val);
+        out.write(reinterpret_cast<const char*>(&val_casted), sizeof(val_casted));
+    } 
+    else if (val.type() == typeid(float)) {
+        out.write(reinterpret_cast<const char*>(&TYPE_FLOAT), sizeof(TYPE_FLOAT));
+        float val_casted = std::any_cast<float>(val);
+        out.write(reinterpret_cast<const char*>(&val_casted), sizeof(val_casted));
+    } 
+    else if (val.type() == typeid(std::string)) {
+        out.write(reinterpret_cast<const char*>(&TYPE_STRING), sizeof(TYPE_STRING));
+        std::string str_val = std::any_cast<std::string>(val);
+        write_string(out, str_val);
+    } 
+    else {
+        std::cerr << "Error: Unsupported type in write_any" << std::endl;
+    }
+}
+
+std::any FailureRecoveryManager::read_any(std::ifstream& in) {
+    uint32_t tipe_data;
+    in.read(reinterpret_cast<char*>(&tipe_data), sizeof(tipe_data));
+
+    if (tipe_data == TYPE_INT) {
+        int val;
+        in.read(reinterpret_cast<char*>(&val), sizeof(val));
+        return val;
+    } 
+    else if (tipe_data == TYPE_FLOAT) {
+        float val;
+        in.read(reinterpret_cast<char*>(&val), sizeof(val));
+        return val;
+    } 
+    else if (tipe_data == TYPE_STRING) {
+        return read_string(in);
+    }
+    
+    // Error message?
+    return std::any();
+}
+
+void FailureRecoveryManager::write_columns(std::ofstream& out, const std::map<std::string, std::any>& columns) {
+    uint32_t count = static_cast<uint32_t>(columns.size());
+    out.write(reinterpret_cast<const char*>(&count), sizeof(count));
+
+    for (const auto& [atr, val] : columns) {
+        write_string(out, atr);
+        write_any(out, val);
+    }
+}
+
+std::map<std::string, std::any> FailureRecoveryManager::read_columns(std::ifstream& in) {
+    uint32_t count;
+    in.read(reinterpret_cast<char*>(&count), sizeof(count));
+
+    std::map<std::string, std::any> columns;
+    for (uint32_t i = 0; i < count; i++) {
+        std::string atr = read_string(in);
+        std::any val = read_any(in);
+        columns[atr] = val;
+    }
+    return columns;
+}
+
+void FailureRecoveryManager::write_row(std::ofstream& out, const Row& row) {
+    write_string(out, row.table_name);
+    write_columns(out, row.columns);
+    out.write(reinterpret_cast<const char*>(&row.row_id), sizeof(row.row_id));
+}
+
+Row FailureRecoveryManager::read_row(std::ifstream& in) {
+    Row row;
+    row.table_name = read_string(in);
+    row.columns = read_columns(in);
+    in.read(reinterpret_cast<char*>(&row.row_id), sizeof(row.row_id));
+    return row;
+}
+
+void FailureRecoveryManager::write_log_to_file(std::ofstream& out, const LogEntry& entry) {
+    out.write(reinterpret_cast<const char*>(&entry.log_id), sizeof(entry.log_id));
+    out.write(reinterpret_cast<const char*>(&entry.transaction_id), sizeof(entry.transaction_id));
+    out.write(reinterpret_cast<const char*>(&entry.timestamp), sizeof(entry.timestamp));
+    
+    int op = static_cast<int>(entry.operation);
+    out.write(reinterpret_cast<const char*>(&op), sizeof(op));
+
+    if (entry.operation == Operation::BEGIN || entry.operation == Operation::COMMIT) {
+        write_string(out, entry.query);
+    } else if (entry.operation == Operation::INSERT) {
+        write_string(out, entry.table_name);
+        write_row(out, entry.new_value);
+        write_string(out, entry.query);
+    } else if (entry.operation == Operation::DELETE) {
+        write_string(out, entry.table_name);
+        write_row(out, entry.old_value);
+        write_string(out, entry.query);
+    } else if (entry.operation == Operation::UPDATE) {
+        write_string(out, entry.table_name);
+        write_row(out, entry.new_value);
+        write_row(out, entry.old_value);
+        write_string(out, entry.query);
+    } else if (entry.operation == Operation::CHECKPOINT) {
+        write_string(out, entry.table_name);
+    }
+}
+
+LogEntry FailureRecoveryManager::read_log_from_file(std::ifstream& in) {
     LogEntry entry;
 
-    std::stringstream ss(serialized_log);
-    std::string segment;
-    std::vector<std::string> parts;
+    in.read(reinterpret_cast<char*>(&entry.log_id), sizeof(entry.log_id));
+    in.read(reinterpret_cast<char*>(&entry.transaction_id), sizeof(entry.transaction_id));
+    in.read(reinterpret_cast<char*>(&entry.timestamp), sizeof(entry.timestamp));
+    
+    int op;
+    in.read(reinterpret_cast<char*>(&op), sizeof(op));
+    entry.operation = static_cast<Operation>(op);
 
-    while (std::getline(ss, segment, '|')) {
-        parts.push_back(segment);
-    }
-
-    if (parts.size() < 8) {
-        std::cerr << "FRM Error: Log korup/tidak lengkap -> " << serialized_log << std::endl;
-        entry.log_id = -1;
-        return entry;
-    }
-
-    try {
-        entry.log_id = std::stoi(parts[0]);
-        entry.transaction_id = std::stoi(parts[1]);
-        entry.timestamp = static_cast<std::time_t>(std::stoll(parts[2]));
-        entry.operation = string_to_operation(parts[3]);
-        entry.table_name = (parts[4] == "NON_TABLE") ? "" : parts[4];
-        entry.old_value = string_to_row(parts[5], entry.table_name);
-        entry.new_value = string_to_row(parts[6], entry.table_name);
-        entry.query = parts[7];
-
-    } catch (const std::exception& e) {
-        std::cerr << "FRM Error: Gagal parsing log entry -> " << e.what() << std::endl;
-        entry.log_id = -1;
+    if (entry.operation == Operation::BEGIN || entry.operation == Operation::COMMIT) {
+        entry.query = read_string(in);
+    } else if (entry.operation == Operation::INSERT) {
+        entry.table_name = read_string(in);
+        entry.new_value = read_row(in);
+        entry.query = read_string(in);
+    } else if (entry.operation == Operation::DELETE) {
+        entry.table_name = read_string(in);
+        entry.old_value = read_row(in);
+        entry.query = read_string(in);
+    } else if (entry.operation == Operation::UPDATE) {
+        entry.table_name = read_string(in);
+        entry.new_value = read_row(in);
+        entry.old_value = read_row(in);
+        entry.query = read_string(in);
+    } else if (entry.operation == Operation::CHECKPOINT) {
+        entry.table_name = read_string(in);
     }
 
     return entry;
 }
 
-void FailureRecoveryManager::append_log_to_file(const std::string& serialized_log, const std::string& file_path) {
-    std::ofstream outfile(file_path, std::ios::app);
-
-    if (!outfile.is_open()) {
-        std::cerr << "FRM Critical Error: Gagal membuka file log untuk ditulis -> " << file_path << std::endl;
-        return;
-    }
-
-    outfile << serialized_log << "\n";
-    outfile.flush();
-    outfile.close();
-}
-
 std::vector<LogEntry> FailureRecoveryManager::read_all_logs(const std::string& file_path) {
     std::vector<LogEntry> logs;
-    std::ifstream infile(file_path);
+    std::ifstream infile(file_path, std::ios::binary);
 
     if (!infile.is_open()) {
-        std::cout << "FRM Info: File log tidak ditemukan (" << file_path << "). Memulai dengan log kosong." << std::endl;
+        std::cerr << "FRM Critical Error: Gagal membuka file log untuk dibaca -> " << file_path << std::endl;
         return logs;
     }
 
-    std::string line;
-    int line_number = 0;
-
-    while (std::getline(infile, line)) {
-        line_number++;
-
-        if (line.empty()) continue;
-        LogEntry entry = deserialize_log(line);
+    while (infile.peek() != EOF) {
+        LogEntry entry = read_log_from_file(infile);
         
-        if (entry.log_id != -1) {
-            logs.push_back(entry);
-        } else {
-            std::cerr << "FRM Warning: Skipping corrupt entry at line " << line_number << std::endl;
+        if (infile.fail()) {
+            std::cerr << "FRM Error: Data corrupt or partial read encountered." << std::endl;
+            break;
         }
+        
+        logs.push_back(entry);
     }
-
+    
     infile.close();
-    std::cout << "FRM: Berhasil memuat " << logs.size() << " entri log dari disk." << std::endl;
     return logs;
 }
+
+// Fungsi akal-akalan supaya public (untuk testing saja)
+std::vector<LogEntry> FailureRecoveryManager::read_all_logs_public(const std::string& file_path) {
+    return read_all_logs(file_path);
+}
+
+// ===============================================================================================================================================
+
+// Helper untuk convert std::any ke string
+std::string FailureRecoveryManager::any_to_string(const std::any& val) {
+    if (!val.has_value()) return "NULL";
+
+    if (val.type() == typeid(int)) {
+        return std::to_string(std::any_cast<int>(val));
+    } else if (val.type() == typeid(float)) {
+        return std::to_string(std::any_cast<float>(val));
+    } else if (val.type() == typeid(std::string)) {
+        return "\"" + std::any_cast<std::string>(val) + "\""; // Pakai kutip biar jelas string
+    }
+    return "UNKNOWN_TYPE";
+}
+
+std::string FailureRecoveryManager::row_to_string(const Row& row) {
+    if (row.row_id == -1 && row.columns.empty()) return "{}";
+
+    std::ostringstream oss;
+    oss << "{ID:" << row.row_id << ",Data:[";
+    
+    bool first = true;
+    for (const auto& [col_name, val] : row.columns) {
+        if (!first) oss << ";"; // Pakai titik koma biar beda dengan pemisah log
+        oss << col_name << "=" << any_to_string(val);
+        first = false;
+    }
+    oss << "]}";
+    return oss.str();
+}
+
+std::string FailureRecoveryManager::sanitize_for_log(std::string input) {
+    // Ganti newline dengan spasi agar tetap 1 baris
+    std::replace(input.begin(), input.end(), '\n', ' ');
+    std::replace(input.begin(), input.end(), '\r', ' ');
+    return input;
+}
+
+void FailureRecoveryManager::write_log_to_text_file(std::ofstream& out, const LogEntry& entry) {
+    // 1. Format Timestamp (Compact)
+    char time_buf[26];
+    #ifdef _WIN32
+        ctime_s(time_buf, sizeof(time_buf), &entry.timestamp);
+    #else
+        ctime_r(&entry.timestamp, time_buf);
+    #endif
+    std::string time_str(time_buf);
+    if (!time_str.empty() && time_str.back() == '\n') time_str.pop_back();
+
+    // 2. Tulis Kolom Utama (Timestamp | LogID | TransID | Op)
+    out << "[" << time_str << "] | "
+        << "LID:" << entry.log_id << " | "
+        << "TID:" << entry.transaction_id << " | "
+        << operation_to_string(entry.operation);
+
+    // 3. Tulis Detail (Tergantung Operasi)
+    if (entry.operation == Operation::INSERT) {
+        out << " | Tbl:" << entry.table_name
+            << " | New:" << row_to_string(entry.new_value);
+    } 
+    else if (entry.operation == Operation::DELETE) {
+        out << " | Tbl:" << entry.table_name
+            << " | Old:" << row_to_string(entry.old_value);
+    } 
+    else if (entry.operation == Operation::UPDATE) {
+        out << " | Tbl:" << entry.table_name
+            << " | Old:" << row_to_string(entry.old_value)
+            << " | New:" << row_to_string(entry.new_value);
+    }
+    else if (entry.operation == Operation::CHECKPOINT) {
+        // Query di checkpoint berisi list active transactions
+        out << " | Info:" << sanitize_for_log(entry.query); 
+    }
+
+    // 4. Tulis Query (Kecuali Checkpoint yang sudah ditulis di atas)
+    // Pastikan query disanitasi agar tidak ada newline
+    if (entry.operation != Operation::CHECKPOINT && !entry.query.empty()) {
+        out << " | Qry:" << sanitize_for_log(entry.query);
+    } else if (entry.operation == Operation::ABORT) {
+        out << " | Status:ABORTED";
+    }
+
+    // Akhiri baris
+    out << "\n";
+}
+
+// ===============================================================================================================================================
 
 bool FailureRecoveryManager::undo_operation(const LogEntry& entry) {
     // Untuk saat ini, belum diintegrate dengan query processor dan storage manager
@@ -508,11 +604,19 @@ void FailureRecoveryManager::flush_buffer() {
         return;
     }
 
+    std::string text_log_path = "../data/wal.log";
+    std::ofstream text_file(text_log_path, std::ios::app);
+
     for (const auto& entry : this->log_buffer) {
-        log_file << serialize_log(entry) << "\n";
+        write_log_to_file(log_file, entry);
+
+        if (text_file.is_open()) {
+            write_log_to_text_file(text_file, entry);
+        }
     }
 
     log_file.close();
+    if (text_file.is_open()) text_file.close();
     this->log_buffer.clear();
     std::cout << "FRM: Flush log buffer ke file " << this->log_file_path << "." << std::endl;
 }

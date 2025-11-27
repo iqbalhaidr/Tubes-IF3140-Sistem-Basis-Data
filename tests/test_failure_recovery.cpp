@@ -21,6 +21,10 @@ namespace mdbms_ = mdbms;
 namespace fs = std::filesystem;
 
 void clean_environment() {
+    if (fs::exists("../data/wal.bin")) {
+        fs::remove("../data/wal.bin");
+        std::cout << "[SETUP] Wal bin lama dihapus." << std::endl;
+    }
     if (fs::exists("../data/wal.log")) {
         fs::remove("../data/wal.log");
         std::cout << "[SETUP] Log lama dihapus." << std::endl;
@@ -44,6 +48,12 @@ std::vector<std::string> read_log_file() {
         }
     }
     return lines;
+}
+
+// Pake yang ini
+std::vector<mdbms::LogEntry> read_log_file_bin() {
+    std::string file_path = "../data/wal.bin";
+    return mdbms::fr::FailureRecoveryManager::get_instance().read_all_logs_public("../data/wal.bin");
 }
 
 // --- Mocking Helper: Mengambil Output Konsol ---
@@ -88,20 +98,21 @@ void test_write_log_persistence() {
     frm.write_log(info);
     
     frm.save_checkpoint();
-    std::vector<std::string> logs = read_log_file();
+    // std::vector<std::string> logs = read_log_file();
+    std::vector<mdbms::LogEntry> logs = read_log_file_bin();
     
     bool found_query = false;
     bool found_checkpoint = false;
 
     std::cout << "   Isi File Log Terbaca:" << std::endl;
-    for (const auto& line : logs) {
-        std::cout << "   -> " << line << std::endl;
+    for (const auto& log : logs) {
+        // std::cout << "   -> " << line << std::endl;
     
-        if (line.find("INSERT INTO mahasiswa") != std::string::npos) {
+        if (log.query.find("INSERT INTO mahasiswa") != std::string::npos) {
             found_query = true;
         }
 
-        if (line.find("CHECKPOINT") != std::string::npos) {
+        if (log.operation == mdbms::Operation::CHECKPOINT) {
             found_checkpoint = true;
         }
     }
@@ -141,19 +152,25 @@ void test_checkpoint_logic() {
 
     frm.save_checkpoint();
 
-    std::vector<std::string> logs = read_log_file();
-    std::string last_line = logs.back(); 
+    // std::vector<std::string> logs = read_log_file();
+    // std::string last_line = logs.back();
+    std::vector<mdbms::LogEntry> logs = read_log_file_bin();
+    mdbms::LogEntry last_entry = logs.back();
 
     // Karena TX 201 sudah commit, harusnya TIDAK ada di list. TX 200 harus ada.
     
-    bool tx200_active = (last_line.find("200") != std::string::npos);
-    bool tx201_gone = (last_line.find("201") == std::string::npos);
+    // bool tx200_active = (last_line.find("200") != std::string::npos);
+    // bool tx201_gone = (last_line.find("201") == std::string::npos);
+
+    bool tx200_active = (last_entry.query.find("200") != std::string::npos);
+    bool tx201_gone = (last_entry.query.find("201") == std::string::npos);
 
     if (tx200_active && tx201_gone) {
         std::cout << GREEN << "PASS: Checkpoint mencatat Active Transaction dengan benar (Hanya TX 200)." << RESET << std::endl;
     } else {
         std::cout << RED << "FAIL: Logika Active Transaction Salah!" << RESET << std::endl;
-        std::cout << "   Log Terakhir: " << last_line << std::endl;
+        std::cout << "   Log Terakhir: " << last_entry.query << std::endl;
+        // std::cout << "   Log Terakhir: " << last_line << std::endl;
         // assert(false); // Uncomment jika logika strict sudah jalan
     }
 }
