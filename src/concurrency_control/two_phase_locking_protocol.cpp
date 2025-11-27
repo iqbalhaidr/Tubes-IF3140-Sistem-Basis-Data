@@ -82,7 +82,7 @@ Response TwoPhaseLockingCCManager::validate_object(const Row& object, int transa
 
         if (transaction_info->status == TransactionStatus::ABORTED) {
             std::cout << "2PL: Transaksi " << transaction_id
-                      << " gagal memperoleh kunci untuk record " << record_hash << std::endl;
+                      << " selesai diabort." << std::endl;
             return Response(false, transaction_id);
         }
 
@@ -374,7 +374,23 @@ void TwoPhaseLockingCCManager::end_transaction(int transaction_id) {
     }
 
     auto transaction_info = transactions[transaction_id];
-    transaction_info->phase = TransactionPhase::SHRINKING;
+
+    bool is_waiting = false;
+    for (auto const& [hash, queue] : lock_wait_queue) {
+        for (int waiter : queue) {
+            if (waiter == transaction_id) {
+                is_waiting = true;
+                break;
+            }
+        }
+        if (is_waiting) {
+            transaction_info->status = TransactionStatus::ABORTED;
+            std::cout << "2PL: Transaksi " << transaction_id
+                      << " sedang menunggu, transaksi akan diabort." << std::endl;
+            release_all_locks(transaction_id);
+            return;
+        };
+    }
 
     if (transaction_info->status == TransactionStatus::ABORTED) {
         std::cout << "2PL: Transaksi " << transaction_id << " sudah diabort." << std::endl;
@@ -462,15 +478,15 @@ void TwoPhaseLockingCCManager::release_all_locks(int transaction_id) {
         }
     }
 
-    std::cout << "2PL: Transaksi " << transaction_id << " melepaskan semua kunci." << std::endl;
-    std::cout << "isi dari wait-lock queue setelah release all locks:" << std::endl;
-    for (const auto& pair : lock_wait_queue) {
-        std::cout << "Record " << pair.first << ": ";
-        for (int tid : pair.second) {
-            std::cout << tid << " ";
-        }
-        std::cout << std::endl;
-    }
+    // std::cout << "2PL: Transaksi " << transaction_id << " melepaskan semua kunci." << std::endl;
+    // std::cout << "isi dari wait-lock queue setelah release all locks:" << std::endl;
+    // for (const auto& pair : lock_wait_queue) {
+    //     std::cout << "Record " << pair.first << ": ";
+    //     for (int tid : pair.second) {
+    //         std::cout << tid << " ";
+    //     }
+    //     std::cout << std::endl;
+    // }
 }
 
 TransactionStatus TwoPhaseLockingCCManager::get_transaction_status(int transaction_id) {
