@@ -791,64 +791,112 @@ void FailureRecoveryManager::recover_from_crash() {
         return;
     }
 
-    std::set<int> undo_list;
+    // FASE ANALYSIS
+    std::cout << "\nFASE ANALYSIS" << std::endl;
+    
+    std::set<int> undo_list;      // Transaksi yang perlu di-UNDO (uncommitted)
+    std::set<int> committed_txs;  // Transaksi yang sudah COMMIT
     int redo_start_index = 0;
 
-    // Proses mencari checkpoint terakhir dan build undo_list
+    // Mencari checkpoint terakhir
     for (int i = static_cast<int>(all_logs.size()) - 1; i >= 0; i--) {
         if (all_logs[i].operation == Operation::CHECKPOINT) {
             undo_list = parse_checkpoint_list(all_logs[i].query);
             redo_start_index = i;
             std::cout << "FRM: Checkpoint ditemukan di log_id " << all_logs[i].log_id 
-                      << " dengan " << undo_list.size() << " transaksi aktif di checkpoint." << std::endl;
+                      << " dengan " << undo_list.size() << " transaksi aktif." << std::endl;
             break;
         }
     }
 
-    // Scan log setelah checkpoint untuk update status transaksi
+    // Scan log setelah checkpoint untuk menentukan status transaksi
     for (size_t i = redo_start_index; i < all_logs.size(); i++) {
         const LogEntry& entry = all_logs[i];
         
         if (entry.operation == Operation::BEGIN) {
             undo_list.insert(entry.transaction_id);
         } 
-        else if (entry.operation == Operation::COMMIT || entry.operation == Operation::ABORT) {
+        else if (entry.operation == Operation::COMMIT) {
             undo_list.erase(entry.transaction_id);
+            committed_txs.insert(entry.transaction_id);
         }
-
-        if (entry.operation == Operation::INSERT || 
-            entry.operation == Operation::UPDATE || 
-            entry.operation == Operation::DELETE) {
-        
-            redo_operation(entry);
+        else if (entry.operation == Operation::ABORT) {
+            undo_list.erase(entry.transaction_id);
         }
     }
     
-    std::cout << "FRM: Ditemukan " << undo_list.size() << " transaksi uncommitted yang perlu di-UNDO." << std::endl;
+    // debugger
+    std::cout << "FRM: Ditemukan " << committed_txs.size() << " transaksi committed (perlu REDO)." << std::endl;
+    std::cout << "FRM: Ditemukan " << undo_list.size() << " transaksi uncommitted (perlu UNDO)." << std::endl;
 
-    // Fase UNDO untuk transaksi yang belum selesai
-    std::cout << "FRM: Memulai Fase UNDO untuk " << undo_list.size() << " transaksi yang belum selesai." << std::endl;
+    // FASE REDO
+    std::cout << "\nFASE REDO" << std::endl;
+    
+    if (committed_txs.empty()) {
+        std::cout << "FRM: Tidak ada transaksi committed yang perlu di-REDO." << std::endl;
+    } else {
+        int redo_count = 0;
+        // REDO semua operasi dari transaksi yang sudah COMMIT (forward scan)
+        for (size_t i = redo_start_index; i < all_logs.size(); i++) {
+            const LogEntry& entry = all_logs[i];
+            
+            // Hanya REDO operasi data dari transaksi yang committed
+            if (committed_txs.count(entry.transaction_id) && 
+                (entry.operation == Operation::INSERT || 
+                 entry.operation == Operation::UPDATE || 
+                 entry.operation == Operation::DELETE)) {
+                
+                std::cout << "FRM: REDO T" << entry.transaction_id << " - " 
+                          << operation_to_string(entry.operation) 
+                          << " pada tabel " << entry.table_name 
+                          << " (log_id: " << entry.log_id << ")" << std::endl;
+                
+                redo_operation(entry);
+                redo_count++;
+            }
+        }
+        std::cout << "FRM: Fase REDO selesai. Total operasi yang di-REDO: " << redo_count << std::endl;
+    }
+
+    // FASE UNDO
+    std::cout << "\nFASE UNDO" << std::endl;
     
     if (undo_list.empty()) {
-        std::cout << "FRM: Tidak ada transaksi yang perlu di-UNDO." << std::endl;
-        return;
+        std::cout << "FRM: Tidak ada transaksi uncommitted yang perlu di-UNDO." << std::endl;
     } else {
+        int undo_count = 0;
+        std::set<int> undo_list_copy = undo_list;
+        
+        // UNDO semua operasi dari transaksi yang belum selesai (backward scan)
         for (int i = static_cast<int>(all_logs.size()) - 1; i >= 0; i--) {
             const LogEntry& entry = all_logs[i];
-            if (undo_list.count(entry.transaction_id)) {
+            
+            if (undo_list_copy.count(entry.transaction_id)) {
                 if (entry.operation == Operation::BEGIN) {
-                    undo_list.erase(entry.transaction_id);
+                    undo_list_copy.erase(entry.transaction_id);
+                    std::cout << "FRM: Mencapai BEGIN untuk T" << entry.transaction_id << std::endl;
                 } 
-                else if (entry.operation != Operation::CHECKPOINT) {
+                else if (entry.operation == Operation::INSERT || 
+                         entry.operation == Operation::UPDATE || 
+                         entry.operation == Operation::DELETE) {
+                    
+                    std::cout << "FRM: UNDO T" << entry.transaction_id << " - " 
+                              << operation_to_string(entry.operation) 
+                              << " pada tabel " << entry.table_name 
+                              << " (log_id: " << entry.log_id << ")" << std::endl;
+                    
                     undo_operation(entry);
+                    undo_count++;
                 }
             }
             
-            if (undo_list.empty()) break;
+            if (undo_list_copy.empty()) break;
         }
+        std::cout << "FRM: Fase UNDO selesai. Total operasi yang di-UNDO: " << undo_count << std::endl;
     }
-
-    std::cout << "FRM: Recovery dari crash selesai." << std::endl;
+    
+    // debugger
+    std::cout << "\nFRM: Recovery dari crash selesai." << std::endl;
 }
 
 void FailureRecoveryManager::flush_buffer() {
