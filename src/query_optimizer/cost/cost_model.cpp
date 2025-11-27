@@ -2,6 +2,7 @@
 #include <cctype>
 #include <cmath>
 #include <limits>
+#include <map>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -105,15 +106,32 @@ ScanTarget parse_scan_target(const std::string& value) {
     return target;
 }
 
+const std::map<std::string, Statistic>& load_stats_cache(const mdbms::sm::StorageEngine* storage) {
+    static const std::map<std::string, Statistic> kEmpty;
+    if (!storage) {
+        return kEmpty;
+    }
+
+    thread_local const mdbms::sm::StorageEngine* cached_engine = nullptr;
+    thread_local std::map<std::string, Statistic> cached_stats;
+
+    if (cached_engine != storage) {
+        cached_engine = storage;
+        cached_stats = const_cast<mdbms::sm::StorageEngine*>(storage)->get_stats();
+    }
+
+    return cached_stats;
+}
+
 // cari statistik dari storage engine
 std::optional<Statistic> lookup_stats(const std::string& table,
                                       const mdbms::sm::StorageEngine* storage) {
     const std::string normalized = normalize_identifier(table);
+    const auto& stats_cache = load_stats_cache(storage);
 
-    if (storage) {
-        const auto x = storage->build_dummy_get_stat(normalized);
-        if (x.has_value()) {
-            return *x;
+    for (const auto& [name, stat] : stats_cache) {
+        if (normalize_identifier(name) == normalized) {
+            return stat;
         }
     }
 

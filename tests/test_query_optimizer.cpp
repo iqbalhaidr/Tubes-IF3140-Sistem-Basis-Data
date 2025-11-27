@@ -13,55 +13,40 @@ namespace mdbms::sm {
 StorageEngine::StorageEngine() = default;
 StorageEngine::StorageEngine(const std::string& /*data_dir*/) {}
 
-std::optional<Statistic> StorageEngine::build_dummy_get_stat(const std::string& table) const {
-    auto to_lower = [](const std::string& s) {
-        std::string out;
-        out.reserve(s.size());
-        for (char c : s) {
-            out.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
-        }
-        return out;
-    };
+std::map<std::string, Statistic> StorageEngine::get_stats() {
+    std::map<std::string, Statistic> stats;
 
-    const std::string key = to_lower(table);
-    const std::map<std::string, Statistic> kStats = {
-        {"student",
-         [] {
-             Statistic s;
-             s.table_name = "student";
-             s.n_r = 1000;
-             s.b_r = 20;
-             s.f_r = 50;
-             s.V_a_r = {{"id", 1000}, {"dept_id", 10}, {"apt_id", 50}, {"age", 60}};
-             return s;
-         }()},
-        {"dept",
-         [] {
-             Statistic s;
-             s.table_name = "dept";
-             s.n_r = 10;
-             s.b_r = 2;
-             s.f_r = 30;
-             s.V_a_r = {{"id", 10}, {"size", 10}, {"location", 3}, {"nama", 10}};
-             return s;
-         }()},
-        {"apt",
-         [] {
-             Statistic s;
-             s.table_name = "apt";
-             s.n_r = 50;
-             s.b_r = 5;
-             s.f_r = 40;
-             s.V_a_r = {{"id", 50}, {"name", 50}, {"type", 5}, {"active", 2}};
-             return s;
-         }()},
-    };
+    stats["student"] = [] {
+        Statistic s;
+        s.table_name = "student";
+        s.n_r = 1000;
+        s.b_r = 20;
+        s.f_r = 50;
+        s.V_a_r = {{"id", 1000}, {"dept_id", 10}, {"apt_id", 50}, {"age", 60}};
+        return s;
+    }();
 
-    auto it = kStats.find(key);
-    if (it != kStats.end()) {
-        return it->second;
-    }
-    return std::nullopt;
+    stats["dept"] = [] {
+        Statistic s;
+        s.table_name = "dept";
+        s.n_r = 10;
+        s.b_r = 2;
+        s.f_r = 30;
+        s.V_a_r = {{"id", 10}, {"size", 10}, {"location", 3}, {"nama", 10}};
+        return s;
+    }();
+
+    stats["apt"] = [] {
+        Statistic s;
+        s.table_name = "apt";
+        s.n_r = 50;
+        s.b_r = 5;
+        s.f_r = 40;
+        s.V_a_r = {{"id", 50}, {"name", 50}, {"type", 5}, {"active", 2}};
+        return s;
+    }();
+
+    return stats;
 }
 }  // namespace mdbms::sm
 
@@ -460,6 +445,23 @@ bool test_query_tree_and_cost() {
     return true;
 }
 
+bool test_analyze_query_with_storage() {
+    std::cout << "\n[TEST] Analyze query integrates parser and storage stats\n";
+    mdbms::qo::OptimizationEngine opt;
+    const std::string query = "SELECT name FROM student WHERE age > 21 LIMIT 5;";
+
+    mdbms::sm::StorageEngine storage;
+    mdbms::qo::ParsedQuery analyzed = opt.analyze_query(query, &storage);
+
+    if (!expect(analyzed.query_tree != nullptr, "Analyzer should build a query tree")) return false;
+    if (!expect(analyzed.query_type == "SELECT", "Analyzer should infer query type")) return false;
+    if (!expect(analyzed.estimated_cost > 0, "Analyzer should compute cost using storage stats"))
+        return false;
+
+    std::cout << "[PASS] Analyze query test\n";
+    return true;
+}
+
 void print_debug_info() {
     std::cout << "\n=== Debug Parser/Tree/Cost Output ===\n";
     const std::vector<QueryDebugCase> debug_cases = {
@@ -526,6 +528,7 @@ int main() {
         {"CREATE TABLE parsing", test_create_table_parsing},
         {"DROP TABLE parsing", test_drop_table_parsing},
         {"Query tree && cost", test_query_tree_and_cost},
+        {"Analyze query w/ storage", test_analyze_query_with_storage},
     };
 
     int passed = 0;

@@ -47,4 +47,10 @@ ParsedQuery OptimizationEngine::optimize_query(const ParsedQuery& query, const m
     return optimized;
 }
 
+ParsedQuery OptimizationEngine::analyze_query(const std::string& query,
+                                              const mdbms::sm::StorageEngine* storage) {
+    ParsedQuery parsed = parse_query(query);
+    return optimize_query(parsed, storage);
+}
+
 } // namespace mdbms::qo

@@ -1077,15 +1077,6 @@ bool StorageEngine::drop_table(const std::string& table) {
     }
 }
 
-std::optional<Statistic> StorageEngine::build_dummy_get_stat(const std::string& table) const {
-    std::map<std::string, Statistic> all_stats = const_cast<StorageEngine*>(this)->get_stats();
-    auto it = all_stats.find(table);
-    if (it != all_stats.end()) {
-        return it->second;
-    }
-    return std::nullopt;
-}
-
 StorageEngine& StorageEngine::get_instance() {
     static StorageEngine instance;
     return instance;

@@ -60,7 +60,6 @@ public:
     // Helper methods for integration
     std::vector<std::string> get_column_names(const std::string& table);
     bool drop_table(const std::string& table);
-    std::optional<Statistic> build_dummy_get_stat(const std::string& table) const;
     static StorageEngine& get_instance();
 
     
