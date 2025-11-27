@@ -24,7 +24,7 @@ std::optional<Statistic> StorageEngine::build_dummy_get_stat(const std::string& 
     };
 
     const std::string key = to_lower(table);
-    const std::unordered_map<std::string, Statistic> kStats = {
+    const std::map<std::string, Statistic> kStats = {
         {"student",
          [] {
              Statistic s;
