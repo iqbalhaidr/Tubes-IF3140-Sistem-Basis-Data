@@ -104,6 +104,12 @@ Rows<Row> StorageEngine::read_using_offsets(const DataRetrieval& retrieval, cons
 
     bool select_all = std::find(retrieval.columns.begin(), retrieval.columns.end(), "*") != retrieval.columns.end();
 
+    if (select_all) {
+        result.column_names = schema.column_names;
+    } else {
+        result.column_names = retrieval.columns;
+    }
+
     for (int64_t off : offsets) {
         if (off < 0) continue;
         din.clear();
@@ -151,6 +157,12 @@ Rows<Row> StorageEngine::full_scan(const DataRetrieval& retrieval) {
 
     bool select_all = std::find(retrieval.columns.begin(), retrieval.columns.end(), "*") != retrieval.columns.end();
 
+    if (select_all) {
+        result.column_names = schema.column_names;
+    } else {
+        result.column_names = retrieval.columns;
+    }
+
     while (file.peek() != EOF) {
         Row row = deserialize_row(file, schema);
         if (row.columns.empty()) {
@@ -195,8 +207,11 @@ int StorageEngine::write_block(const DataWrite<Row>& write) {
     std::cout << "[DEBUG] SM write_block: schema.column_names.size() = " << schema.column_names.size() << std::endl;
     std::cout << "[DEBUG] SM write_block: write.new_value.columns.size() = " << write.new_value.columns.size() << std::endl;
     std::cout << "[DEBUG] SM write_block: write.new_value.columns: ";
-    for (const auto& pair : write.new_value.columns) {
-        std::cout << pair.first << " ";
+    
+    for (const auto& col_name : schema.column_names) {
+        if (write.new_value.columns.count(col_name)) {
+            std::cout << col_name << " ";
+        }
     }
     std::cout << std::endl;
     std::cout << "[DEBUG] SM write_block: schema.column_names order: ";
@@ -739,14 +754,16 @@ std::map<std::string, Statistic> StorageEngine::get_stats() {
                 break;
             }
 
-            for (auto& col : row.columns) {
-                std::string hash_key = col.first + to_string_any(col.second);
-                auto it = distinct_values_count.find(hash_key);
-                if (it != distinct_values_count.end()) {
-                    it->second.insert(col.first);
-                }
-                else {
-                    distinct_values_count[hash_key].insert(col.first);
+            for (const auto& col_name : table.column_names) {
+                if (row.columns.count(col_name)) {
+                    std::string hash_key = col_name + to_string_any(row.columns.at(col_name));
+                    auto it = distinct_values_count.find(hash_key);
+                    if (it != distinct_values_count.end()) {
+                        it->second.insert(col_name);
+                    }
+                    else {
+                        distinct_values_count[hash_key].insert(col_name);
+                    }
                 }
             }
         }

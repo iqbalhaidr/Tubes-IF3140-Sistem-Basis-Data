@@ -409,9 +409,11 @@ Rows<Row> QueryProcessor::execute_join(const Rows<Row>& left_table, const Rows<R
         std::vector<std::string> common_columns;
 
         if (!left_table.data.empty() && !right_table.data.empty()) {
-            for (const auto& [left_col_name, _] : left_table.data[0].columns) {
-                if (right_table.data[0].columns.find(left_col_name) != right_table.data[0].columns.end()) {
-                    common_columns.push_back(left_col_name);
+            for (const auto& left_col_name : left_table.column_names) {
+                if (std::find(right_table.column_names.begin(), right_table.column_names.end(), left_col_name) != right_table.column_names.end()) {
+                    if (right_table.data[0].columns.find(left_col_name) != right_table.data[0].columns.end()) {
+                        common_columns.push_back(left_col_name);
+                    }
                 }
             }
         }
@@ -423,8 +425,10 @@ Rows<Row> QueryProcessor::execute_join(const Rows<Row>& left_table, const Rows<R
                     Row merged;
                     merged.table_name = left_row.table_name + "_" + right_row.table_name;
                     merged.columns = left_row.columns;
-                    for (const auto& [key, val] : right_row.columns) {
-                        merged.columns[key] = val;
+                    for (const auto& key : right_table.column_names) {
+                        if (right_row.columns.count(key)) {
+                            merged.columns[key] = right_row.columns.at(key);
+                        }
                     }
                     result.data.push_back(merged);
                 }
@@ -471,9 +475,11 @@ Rows<Row> QueryProcessor::execute_join(const Rows<Row>& left_table, const Rows<R
                     merged.table_name = left_row.table_name + "_" + right_row.table_name;
                     merged.columns = left_row.columns;
 
-                    for (const auto& [key, val] : right_row.columns) {
+                    for (const auto& key : right_table.column_names) {
                         if (std::find(common_columns.begin(), common_columns.end(), key) == common_columns.end()) {
-                            merged.columns[key] = val;
+                            if (right_row.columns.count(key)) {
+                                merged.columns[key] = right_row.columns.at(key);
+                            }
                         }
                     }
                     result.data.push_back(merged);
@@ -498,8 +504,10 @@ Rows<Row> QueryProcessor::execute_join(const Rows<Row>& left_table, const Rows<R
                 Row merged;
                 merged.table_name = left_row.table_name + "_" + right_row.table_name;
                 merged.columns = left_row.columns;
-                for (const auto& [key, val] : right_row.columns) {
-                    merged.columns[key] = val;
+                for (const auto& key : right_table.column_names) {
+                    if (right_row.columns.count(key)) {
+                        merged.columns[key] = right_row.columns.at(key);
+                    }
                 }
                 result.data.push_back(merged);
             }
@@ -547,11 +555,13 @@ Rows<Row> QueryProcessor::execute_join(const Rows<Row>& left_table, const Rows<R
                 merged.table_name = left_row.table_name + "_" + right_row.table_name;
                 merged.columns = left_row.columns;
 
-                for (const auto& [key, val] : right_row.columns) {
-                    if (merged.columns.find(key) != merged.columns.end()) {
-                        merged.columns[right_row.table_name + "." + key] = val;
-                    } else {
-                        merged.columns[key] = val;
+                for (const auto& key : right_table.column_names) {
+                    if (right_row.columns.count(key)) {
+                        if (merged.columns.find(key) != merged.columns.end()) {
+                            merged.columns[right_row.table_name + "." + key] = right_row.columns.at(key);
+                        } else {
+                            merged.columns[key] = right_row.columns.at(key);
+                        }
                     }
                 }
 

@@ -96,15 +96,17 @@ void TUI::display_results(const Rows<Row>& rows) {
         return;
     }
 
-    // Collect all column names
     std::vector<std::string> all_columns;
-    std::map<std::string, bool> column_seen;
-
-    for (const auto& row : rows.data) {
-        for (const auto& pair : row.columns) {
-            if (!column_seen[pair.first]) {
-                all_columns.push_back(pair.first);
-                column_seen[pair.first] = true;
+    if (!rows.column_names.empty()) {
+        all_columns = rows.column_names;
+    } else {
+        std::map<std::string, bool> column_seen;
+        for (const auto& row : rows.data) {
+            for (const auto& pair : row.columns) {
+                if (!column_seen[pair.first]) {
+                    all_columns.push_back(pair.first);
+                    column_seen[pair.first] = true;
+                }
             }
         }
     }

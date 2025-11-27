@@ -2,6 +2,7 @@
 #include <iostream>
 #include <fstream>
 #include <algorithm>
+#include <vector>
 #include <cctype>
 #include <sstream>
 
@@ -282,9 +283,15 @@ std::string FailureRecoveryManager::row_to_string(const Row& row) {
 
     ss << "{";
     bool first = true;
-    for (const auto& [atr, val] : row.columns) {
+    std::vector<std::string> col_names;
+    for (const auto& [atr, _] : row.columns) {
+        col_names.push_back(atr);
+    }
+    std::sort(col_names.begin(), col_names.end());
+    
+    for (const auto& atr : col_names) {
         if (!first) ss << ",";
-        ss << atr << ":" << any_to_string(val);
+        ss << atr << ":" << any_to_string(row.columns.at(atr));
         first = false;
     }
     ss << "}";

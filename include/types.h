@@ -4,6 +4,7 @@
 #include <ctime>
 #include <map>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace mdbms {
@@ -42,7 +43,7 @@ enum class DataType {
 
 struct Row {
     std::string table_name;
-    std::map<std::string, std::any> columns;
+    std::unordered_map<std::string, std::any> columns;
     int row_id;
 
     Row() : row_id(-1) {}

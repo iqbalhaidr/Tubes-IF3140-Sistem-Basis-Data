@@ -4,6 +4,7 @@
 #include <functional>
 #include <iostream>
 #include <sstream>
+#include <vector>
 
 namespace mdbms::ccm {
 
@@ -18,8 +19,14 @@ size_t CCManager::generate_row_hash(const Row& row) {
         // Hash berdasarkan row_id jika ada
         hash ^= int_hasher(row.row_id) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
     } else {
-        // Jika tidak, Hash berdasarkan nilai kolom
-        for (const auto& [col_name, col_value] : row.columns) {
+        std::vector<std::string> col_names;
+        for (const auto& [col_name, _] : row.columns) {
+            col_names.push_back(col_name);
+        }
+        std::sort(col_names.begin(), col_names.end());
+        
+        for (const auto& col_name : col_names) {
+            const auto& col_value = row.columns.at(col_name);
             hash ^= string_hasher(col_name) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
 
             try {
