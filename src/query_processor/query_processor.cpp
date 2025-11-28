@@ -14,7 +14,7 @@ QueryProcessor::QueryProcessor(std::shared_ptr<mdbms::qo::OptimizationEngine> op
                                std::shared_ptr<mdbms::sm::StorageEngine> storage,
                                std::shared_ptr<mdbms::ccm::ConcurrencyControlManager> concurrency,
                                std::shared_ptr<mdbms::fr::FailureRecoveryManager> recovery)
-    : current_transaction_id(-1) {
+    : current_transaction_id(-1), explicit_transaction_started(false) {
     if (optimizer) {
         qo_engine = optimizer.get();
     } else {
@@ -55,6 +55,8 @@ ExecutionResult QueryProcessor::execute_query(const std::string& query) {
         // Handle Transaction 
         if (query_type == "BEGIN") {
             int tid = begin_transaction();
+            current_transaction_id = tid;  // Update current_transaction_id to track the active transaction
+            explicit_transaction_started = true;  // Mark as explicitly started
             result.transaction_id = tid;
             result.message = "Transaction " + std::to_string(tid) + " started";
             result.success = true;
@@ -65,6 +67,7 @@ ExecutionResult QueryProcessor::execute_query(const std::string& query) {
             result.message = success ? "Transaction committed" : "Commit failed";
             result.success = success;
             current_transaction_id = -1;
+            explicit_transaction_started = false;  // Reset flag after commit
             return result;
         } else if (query_type == "ROLLBACK" || query_type == "ABORT") {
             bool success = abort_transaction(current_transaction_id);
@@ -72,12 +75,14 @@ ExecutionResult QueryProcessor::execute_query(const std::string& query) {
             result.message = success ? "Transaction aborted" : "Abort failed";
             result.success = success;
             current_transaction_id = -1;
+            explicit_transaction_started = false;  // Reset flag after abort
             return result;
         }
 
         // Ensure have transaction 
         if (current_transaction_id == -1) {
             current_transaction_id = begin_transaction();
+            explicit_transaction_started = false;  // Auto-started transaction, not explicit
         }
         result.transaction_id = current_transaction_id;
 
@@ -90,18 +95,22 @@ ExecutionResult QueryProcessor::execute_query(const std::string& query) {
             result.data = rows;
             result.affected_rows = rows.rows_count;
             result.message = "Retrieved " + std::to_string(rows.rows_count) + " rows";
+            result.success = true;
         } else if (query_type == "UPDATE") {
             int affected = execute_update(optimized_query, current_transaction_id);
             result.affected_rows = affected;
             result.message = "Updated " + std::to_string(affected) + " rows";
+            result.success = true;
         } else if (query_type == "INSERT") {
             int affected = execute_insert(optimized_query, current_transaction_id);
             result.affected_rows = affected;
             result.message = "Inserted " + std::to_string(affected) + " rows";
+            result.success = true;
         } else if (query_type == "DELETE") {
             int affected = execute_delete(optimized_query, current_transaction_id);
             result.affected_rows = affected;
             result.message = "Deleted " + std::to_string(affected) + " rows";
+            result.success = true;
         } else if (query_type == "CREATE") {
             bool success = execute_create_table(optimized_query, current_transaction_id);
             result.success = success;
@@ -121,8 +130,8 @@ ExecutionResult QueryProcessor::execute_query(const std::string& query) {
             frm_manager->write_log(result);
         }
 
-        // Auto-commit queries
-        if (ccm_manager) {
+        // Auto-commit queries only if transaction was auto-started (not explicitly started with BEGIN)
+        if (ccm_manager && !explicit_transaction_started) {
             ccm_manager->end_transaction(result.transaction_id);
             current_transaction_id = -1;
         }
@@ -136,6 +145,7 @@ ExecutionResult QueryProcessor::execute_query(const std::string& query) {
         if (current_transaction_id != -1) {
             abort_transaction(current_transaction_id);
             current_transaction_id = -1;
+            explicit_transaction_started = false;  // Reset flag after abort
         }
     }
     return result;
@@ -148,6 +158,12 @@ Rows<Row> QueryProcessor::execute_select(const mdbms::qo::ParsedQuery& parsed_qu
         std::vector<Rows<Row>> table_data;
 
         for (const auto& table_name : parsed_query.from_tables) {
+            try {
+                sm_engine->get_table_schema(table_name);
+            } catch (const std::runtime_error& e) {
+                throw std::runtime_error("Table '" + table_name + "' does not exist");
+            }
+
             DataRetrieval retrieval;
             retrieval.table = table_name;
             retrieval.columns = parsed_query.select_columns;
@@ -582,6 +598,12 @@ int QueryProcessor::execute_update(const mdbms::qo::ParsedQuery& parsed_query, i
 
         std::string table_name = parsed_query.from_tables[0];
 
+        try {
+            sm_engine->get_table_schema(table_name);
+        } catch (const std::runtime_error& e) {
+            throw std::runtime_error("Table '" + table_name + "' does not exist");
+        }
+
         // Request WRITE access ke CCM (nunggu integrasi ccm)
         if (ccm_manager) {
             Row request;
@@ -671,6 +693,12 @@ int QueryProcessor::execute_insert(const mdbms::qo::ParsedQuery& parsed_query, i
         }
 
         std::string table_name = parsed_query.from_tables[0];
+
+        try {
+            sm_engine->get_table_schema(table_name);
+        } catch (const std::runtime_error& e) {
+            throw std::runtime_error("Table '" + table_name + "' does not exist");
+        }
 
         // Request WRITE access from CCM
         if (ccm_manager) {
@@ -809,6 +837,12 @@ int QueryProcessor::execute_delete(const mdbms::qo::ParsedQuery& parsed_query, i
         }
 
         std::string table_name = parsed_query.from_tables[0];
+
+        try {
+            sm_engine->get_table_schema(table_name);
+        } catch (const std::runtime_error& e) {
+            throw std::runtime_error("Table '" + table_name + "' does not exist");
+        }
 
         // Request WRITE access
         if (ccm_manager) {

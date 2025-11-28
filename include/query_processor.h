@@ -55,12 +55,13 @@ public:
     Rows<Row> apply_order_by(const Rows<Row>& rows, const std::string& column, bool ascending);
     Rows<Row> apply_limit(const Rows<Row>& rows, int limit);
 private:
-    mdbms::qo::OptimizationEngine* qo_engine;  // Singleton - non-owning pointer
-    mdbms::sm::StorageEngine* sm_engine;  // Singleton - non-owning pointer
-    mdbms::ccm::ConcurrencyControlManager* ccm_manager;  // Singleton - non-owning pointer
-    mdbms::fr::FailureRecoveryManager* frm_manager;  // Singleton - non-owning pointer
+    mdbms::qo::OptimizationEngine* qo_engine;  // Singleton
+    mdbms::sm::StorageEngine* sm_engine;  // Singleton
+    mdbms::ccm::ConcurrencyControlManager* ccm_manager;  // Singleton
+    mdbms::fr::FailureRecoveryManager* frm_manager;  // Singleton
 
     int current_transaction_id;
+    bool explicit_transaction_started;  // Track if transaction was explicitly started with BEGIN
 
     std::string parse_query_type(const std::string& query);
 };
