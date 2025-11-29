@@ -1,6 +1,7 @@
 #pragma once
 #include <map>
 #include <set>
+#include <list>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -34,6 +35,7 @@ public:
     virtual void log_object(const Row& object, int transaction_id) = 0;
     virtual Response validate_object(const Row& object, int transaction_id, Action action) = 0;
     virtual void end_transaction(int transaction_id) = 0;
+    virtual TransactionStatus get_transaction_status(int transaction_id) = 0;
 
 protected:
     static size_t generate_row_hash(const Row& row);
@@ -49,6 +51,7 @@ public:
     void log_object(const Row& object, int transaction_id) override;
     Response validate_object(const Row& object, int transaction_id, Action action) override;
     void end_transaction(int transaction_id) override;
+    TransactionStatus get_transaction_status(int transaction_id) override;
 
 private:
     std::map<int, std::shared_ptr<Transaction>> transactions_;
@@ -82,6 +85,7 @@ public:
     void log_object(const Row& object, int transaction_id) override;
     Response validate_object(const Row& object, int transaction_id, Action action) override;
     void end_transaction(int transaction_id) override;
+    TransactionStatus get_transaction_status(int transaction_id) override;
 
 private:
     bool acquire_s_lock(int transaction_id, size_t record_hash);
@@ -92,6 +96,7 @@ private:
     void release_s_lock(int transaction_id, size_t record_hash);
     void release_x_lock(int transaction_id, size_t record_hash);
     void release_all_locks(int transaction_id);
+
 
     // map <record_hash -> transaction ID> untuk xlock
     std::map<size_t, int> x_lock_table;
@@ -104,6 +109,9 @@ private:
 
     // map <transaction ID -> set of transaction ID> untuk wait-for graph (deteksi deadlock)
     std::map<int, std::set<int>> wait_for_graph;
+
+    // map <record_hash -> queue of transaction ID> untuk antrian menunggu lock
+    std::map<size_t, std::list<int>> lock_wait_queue;
 
     int current_transaction_id;
     std::recursive_mutex mutex_;
@@ -126,6 +134,8 @@ public:
     void log_object(const Row& object, int transaction_id);
     Response validate_object(const Row& object, int transaction_id, Action action);
     void end_transaction(int transaction_id);
+
+    TransactionStatus get_transaction_status(int transaction_id);
 
 private:
     // Constructor private untuk Singleton

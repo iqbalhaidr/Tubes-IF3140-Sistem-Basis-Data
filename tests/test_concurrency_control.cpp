@@ -6,7 +6,8 @@
 #include <string>
 #include <thread>
 #include <vector>
-
+#include <thread> // Wajib untuk sleep_for
+#include <chrono> // Wajib untuk durasi waktu
 #include "types.h"
 
 #include "concurrency_control.h"
@@ -268,13 +269,13 @@ void test_twoPL_cc() {
     ccm.log_object(row2, tid2);
     Response response4 = ccm.validate_object(row2, tid2, Action::WRITE);
     print_response("Transaction " + std::to_string(tid2) + " WRITE on Row2: ", response4);
-    print_result("T2 WRITE Row2 (expect fail after abort)", response4.allowed == false);
+    print_result("T2 WRITE Row2", response4.allowed == true);
 
     // tc: lock upgrade attempt (atau read di row lain)
     int tid3 = ccm.begin_transaction();
     Response response5 = ccm.validate_object(row2, tid3, Action::READ);
     print_response("Transaction " + std::to_string(tid3) + " READ on Row2: ", response5);
-    print_result("T3 READ Row2", response5.allowed == true);
+    print_result("T3 READ Row2 (failed karena T2 megang xlock)", response5.allowed == false);
     ccm.end_transaction(tid1);
 
     // tid3 mencoba write row1 (setelah tid1 lepas lock)
@@ -402,6 +403,132 @@ void test_twoPL_deadlock_abort() {
     ccm.end_transaction(tid2);
 }
 
+void execute_with_retry(ConcurrencyControlManager& ccm, int trx_id, const Row& row, Action action, std::string label) {
+    bool access_granted = false;
+    int attempt = 0;
+
+    std::cout << "[" << label << "] Memulai request..." << std::endl;
+
+    while (!access_granted) {
+        attempt++;
+        Response resp = ccm.validate_object(row, trx_id, action);
+
+        if (resp.allowed) {
+            std::cout << "[" << label << "] SUKSES mendapatkan Lock di percobaan ke-" << attempt << std::endl;
+            access_granted = true;
+        } else {
+            TransactionStatus status = ccm.get_transaction_status(trx_id);
+            if (status == TransactionStatus::ABORTED) {
+                std::cout << "[" << label << "] Transaksi di-ABORT. Berhenti mencoba." << std::endl;
+                return;
+            }
+
+            // spesifik pengujian untuk test_twoPL_queue_fairness
+            if (label == "T3") {
+                std::cout << "[" << label << "] Gagal (Wait). Tidur 100ms..." << std::endl;
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            } else {
+                std::cout << "[" << label << "] Gagal (Wait). Tidur 1000ms..." << std::endl;
+                std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+            }
+
+        }
+    }
+}
+
+void test_twoPL_multithreaded() {
+    std::cout << "\n--- TEST: 2PL Multi-threaded Polling Simulation ---\n" << std::endl;
+
+    auto& ccm = ConcurrencyControlManager::get_instance();
+    ccm.switch_algorithm("twophaselocking");
+
+    Row row1 = create_row(1, "Rebutan");
+
+    // T1 ambil lock, T2 menunggu sampai T1 selesai
+    std::thread t1_thread([&]() {
+        int tid1 = ccm.begin_transaction();
+        ccm.log_object(row1, tid1);
+        ccm.validate_object(row1, tid1, Action::WRITE);
+        
+        std::cout << "[T1] dijalankan selama 2 detik." << std::endl;
+        std::this_thread::sleep_for(std::chrono::seconds(2));
+        
+        std::cout << "[T1] commit." << std::endl;
+        ccm.end_transaction(tid1);
+    });
+
+    // jeda agar T1 dijalankan duluan
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+    // T2 mencoba ambil lock, harus nunggu T1 selesai
+    std::thread t2_thread([&]() {
+        int tid2 = ccm.begin_transaction();
+        execute_with_retry(ccm, tid2, row1, Action::WRITE, "T2");
+        ccm.end_transaction(tid2);
+    });
+
+    t1_thread.join();
+    t2_thread.join();
+
+    std::cout << "\n--- Test Selesai ---" << std::endl;
+}
+
+void test_twoPL_queue_fairness() {
+    std::cout << "\n--- TEST: 2PL Queue Fairness (T1 -> T2 -> T3) ---\n" << std::endl;
+
+    auto& ccm = ConcurrencyControlManager::get_instance();
+    ccm.switch_algorithm("twophaselocking");
+
+    Row row1 = create_row(1, "Hot Resource");
+
+    // T1 ambil lock
+    std::thread t1_thread([&]() {
+        int tid = ccm.begin_transaction();
+        ccm.log_object(row1, tid);
+        ccm.validate_object(row1, tid, Action::WRITE);
+        
+        std::cout << "[T1] dijalankan selama 2 detik." << std::endl;
+        std::this_thread::sleep_for(std::chrono::seconds(2));
+        
+        std::cout << "[T1] commit." << std::endl;
+        ccm.end_transaction(tid);
+    });
+
+    // jeda agar T1 dijalankan duluan
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+    // T2 mencoba ambil lock, harus nunggu T1 selesai
+    std::thread t2_thread([&]() {
+        int tid = ccm.begin_transaction();        
+        execute_with_retry(ccm, tid, row1, Action::WRITE, "T2");
+
+        std::cout << "[T2] dijalankan selama 3 detik." << std::endl;
+        std::this_thread::sleep_for(std::chrono::seconds(3));
+        
+        std::cout << "[T2] commit." << std::endl;
+        ccm.end_transaction(tid);
+    });
+
+    // jeda 200 lagi biar T2 pasti masuk antrian sebelum T3
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+    // T3 mencoba ambil lock sebelum T2 dapat lock, ditolak sesuai dengan wait-lock queue
+    std::thread t3_thread([&]() {
+        int tid = ccm.begin_transaction();
+        execute_with_retry(ccm, tid, row1, Action::WRITE, "T3");
+
+        std::cout << "[T3] dijalankan." << std::endl;
+        ccm.end_transaction(tid);
+    });
+
+    // tunggu semua selesai
+    t1_thread.join();
+    t2_thread.join();
+    t3_thread.join();
+
+    std::cout << "\n--- Test Selesai ---" << std::endl;
+}
+
 int main() {
     try {
         test_singleton();
@@ -416,6 +543,8 @@ int main() {
         test_twoPL_abort();
         test_twoPL_deadlock();
         test_twoPL_deadlock_abort();
+        test_twoPL_multithreaded();
+        test_twoPL_queue_fairness();
     } catch (const std::exception& e) {
         std::cerr << "Exception: " << e.what() << std::endl;
     }
