@@ -101,15 +101,12 @@ void print_rows(const mdbms::Rows<mdbms::Row>& rows) {
 class TestSetup {
 public:
     std::string test_dir;
-    std::shared_ptr<mdbms::qo::OptimizationEngine> optimizer;
-    std::shared_ptr<mdbms::sm::StorageEngine> storage;
     std::unique_ptr<mdbms::qp::QueryProcessor> qp;
 
     TestSetup(const std::string& dir) : test_dir(dir) {
         std::filesystem::create_directory(test_dir);
-        optimizer = std::make_shared<mdbms::qo::OptimizationEngine>();
-        storage = std::make_shared<mdbms::sm::StorageEngine>(test_dir);
-        qp = std::make_unique<mdbms::qp::QueryProcessor>(optimizer, storage);
+        // All components are singletons, QueryProcessor uses get_instance() for all
+        qp = std::make_unique<mdbms::qp::QueryProcessor>();
     }
 
     ~TestSetup() {
@@ -125,7 +122,8 @@ public:
             {"FullName", name},
             {"GPA", gpa}
         };
-        storage->write_block(insert);
+        // All components are singletons, use get_instance()
+        mdbms::sm::StorageEngine::get_instance().write_block(insert);
     }
 
     void insert_course(int course_id, int year, const std::string& name) {
@@ -137,30 +135,32 @@ public:
             {"Year", year},
             {"CourseName", name}
         };
-        storage->write_block(insert);
+        // All components are singletons, use get_instance()
+        mdbms::sm::StorageEngine::get_instance().write_block(insert);
     }
 
     mdbms::Rows<mdbms::Row> read_all_students() {
         mdbms::DataRetrieval retrieval;
         retrieval.table = "Student";
         retrieval.columns = {"*"};
-        return storage->read_block(retrieval);
+        // All components are singletons, use get_instance()
+        return mdbms::sm::StorageEngine::get_instance().read_block(retrieval);
     }
 
     mdbms::Rows<mdbms::Row> read_all_courses() {
         mdbms::DataRetrieval retrieval;
         retrieval.table = "Course";
         retrieval.columns = {"*"};
-        return storage->read_block(retrieval);
+        // All components are singletons, use get_instance()
+        return mdbms::sm::StorageEngine::get_instance().read_block(retrieval);
     }
 };
 
 bool test_basic_integration() {
     std::cout << "\n=== TEST 1: Basic Integration ===" << std::endl;
 
-    auto optimizer = std::make_shared<mdbms::qo::OptimizationEngine>();
-    auto storage = std::make_shared<mdbms::sm::StorageEngine>();
-    mdbms::qp::QueryProcessor query_processor(optimizer, storage);
+    // All components are singletons, QueryProcessor uses get_instance() for all
+    mdbms::qp::QueryProcessor query_processor;
 
     const std::string query = "SELECT * FROM integration_test";
     const auto result = query_processor.execute_query(query);
@@ -192,9 +192,8 @@ bool test_basic_integration() {
 bool test_begin_transaction() {
     std::cout << "\n=== TEST 2: Begin Transaction ===" << std::endl;
 
-    auto optimizer = std::make_shared<mdbms::qo::OptimizationEngine>();
-    auto storage = std::make_shared<mdbms::sm::StorageEngine>();
-    mdbms::qp::QueryProcessor query_processor(optimizer, storage);
+    // All components are singletons, QueryProcessor uses get_instance() for all
+    mdbms::qp::QueryProcessor query_processor;
 
     // Test begin_transaction
     int txn_id = query_processor.begin_transaction();

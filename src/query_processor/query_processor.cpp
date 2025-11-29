@@ -10,31 +10,13 @@
 
 namespace mdbms::qp {
 
-QueryProcessor::QueryProcessor(std::shared_ptr<mdbms::qo::OptimizationEngine> optimizer,
-                               std::shared_ptr<mdbms::sm::StorageEngine> storage,
-                               std::shared_ptr<mdbms::ccm::ConcurrencyControlManager> concurrency,
-                               std::shared_ptr<mdbms::fr::FailureRecoveryManager> recovery)
+QueryProcessor::QueryProcessor()
     : current_transaction_id(-1), explicit_transaction_started(false) {
-    if (optimizer) {
-        qo_engine = optimizer.get();
-    } else {
-        qo_engine = &mdbms::qo::OptimizationEngine::get_instance();
-    }
-    if (storage) {
-        sm_engine = storage.get();
-    } else {
-        sm_engine = &mdbms::sm::StorageEngine::get_instance();
-    }
-    if (concurrency) {
-        ccm_manager = concurrency.get();
-    } else {
-        ccm_manager = &mdbms::ccm::ConcurrencyControlManager::get_instance();
-    }
-    if (recovery) {
-        frm_manager = recovery.get();
-    } else {
-        frm_manager = &mdbms::fr::FailureRecoveryManager::get_instance();
-    }
+    // All components are singletons, always use get_instance()
+    qo_engine = &mdbms::qo::OptimizationEngine::get_instance();
+    sm_engine = &mdbms::sm::StorageEngine::get_instance();
+    ccm_manager = &mdbms::ccm::ConcurrencyControlManager::get_instance();
+    frm_manager = &mdbms::fr::FailureRecoveryManager::get_instance();
 
     std::cout << "QP: Query Processor initialized" << std::endl;
 }
@@ -173,11 +155,11 @@ Rows<Row> QueryProcessor::execute_select(const mdbms::qo::ParsedQuery& parsed_qu
                 Row request;
                 request.table_name = table_name;
                 request.row_id = -1;
+                ccm_manager->log_object(request, transaction_id);
                 Response access = ccm_manager->validate_object(request, transaction_id, Action::READ);
                 if (!access.allowed) {
                     throw std::runtime_error("Concurrency control denied READ access for table " + table_name);
                 }
-                ccm_manager->log_object(request, transaction_id);
             }
 
             // Check if table has index
@@ -609,11 +591,11 @@ int QueryProcessor::execute_update(const mdbms::qo::ParsedQuery& parsed_query, i
             Row request;
             request.table_name = table_name;
             request.row_id = -1;
+            ccm_manager->log_object(request, transaction_id);
             Response access = ccm_manager->validate_object(request, transaction_id, Action::WRITE);
             if (!access.allowed) {
                 throw std::runtime_error("Concurrency control denied WRITE access for table " + table_name);
             }
-            ccm_manager->log_object(request, transaction_id);
         }
 
         DataRetrieval retrieval;
@@ -704,18 +686,18 @@ int QueryProcessor::execute_insert(const mdbms::qo::ParsedQuery& parsed_query, i
         if (ccm_manager) {
             Row request;
             request.table_name = table_name;
-            request.row_id = -1; // New row
+            request.row_id = -1;
+            ccm_manager->log_object(request, transaction_id);
             Response access = ccm_manager->validate_object(request, transaction_id, Action::WRITE);
             if (!access.allowed) {
                 throw std::runtime_error("Concurrency control denied WRITE access for table " + table_name);
             }
-            ccm_manager->log_object(request, transaction_id);
         }
 
         // Get column names for mapping values
         std::vector<std::string> column_names;
         
-        // If INSERT specifies columns explicitly, use those
+        // INSERT specifies columns
         if (!parsed_query.insert_columns.empty()) {
             std::cout << "[DEBUG] QP INSERT: Using explicit column list: ";
             for (const auto& col : parsed_query.insert_columns) {
@@ -849,11 +831,11 @@ int QueryProcessor::execute_delete(const mdbms::qo::ParsedQuery& parsed_query, i
             Row request;
             request.table_name = table_name;
             request.row_id = -1; 
+            ccm_manager->log_object(request, transaction_id);
             Response access = ccm_manager->validate_object(request, transaction_id, Action::WRITE);
             if (!access.allowed) {
                 throw std::runtime_error("Concurrency control denied WRITE access for table " + table_name);
             }
-            ccm_manager->log_object(request, transaction_id);
         }
 
         // Find rows to delete first (for logging and accurate count)
@@ -923,11 +905,11 @@ bool QueryProcessor::execute_create_table(const mdbms::qo::ParsedQuery& parsed_q
             Row request;
             request.table_name = table_name;
             request.row_id = -1;
+            ccm_manager->log_object(request, transaction_id);
             Response access = ccm_manager->validate_object(request, transaction_id, Action::WRITE);
             if (!access.allowed) {
                 throw std::runtime_error("Concurrency control denied WRITE access for table " + table_name);
             }
-            ccm_manager->log_object(request, transaction_id);
         }
 
         TableSchema schema;
@@ -1011,11 +993,11 @@ bool QueryProcessor::execute_drop_table(const mdbms::qo::ParsedQuery& parsed_que
             Row request;
             request.table_name = table_name;
             request.row_id = -1;
+            ccm_manager->log_object(request, transaction_id);
             Response access = ccm_manager->validate_object(request, transaction_id, Action::WRITE);
             if (!access.allowed) {
                 throw std::runtime_error("Concurrency control denied WRITE access for table " + table_name);
             }
-            ccm_manager->log_object(request, transaction_id);
         }
 
         bool success = sm_engine->drop_table(table_name);

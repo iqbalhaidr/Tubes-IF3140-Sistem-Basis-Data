@@ -29,16 +29,12 @@ void insert_test_data(mdbms::sm::StorageEngine& storage, const std::string& tabl
 class IntegrationTestSetup {
 public:
     std::string test_dir;
-    std::shared_ptr<mdbms::qo::OptimizationEngine> optimizer;
-    std::shared_ptr<mdbms::sm::StorageEngine> storage;
     std::unique_ptr<mdbms::qp::QueryProcessor> qp;
 
     IntegrationTestSetup(const std::string& dir) : test_dir(dir) {
         std::filesystem::create_directory(test_dir);
-        optimizer = std::make_shared<mdbms::qo::OptimizationEngine>();
-        storage = std::make_shared<mdbms::sm::StorageEngine>(test_dir);
-        // CCM and FRM are singletons, pass nullptr and let QueryProcessor use get_instance()
-        qp = std::make_unique<mdbms::qp::QueryProcessor>(optimizer, storage, nullptr, nullptr);
+        // All components are singletons, QueryProcessor uses get_instance() for all
+        qp = std::make_unique<mdbms::qp::QueryProcessor>();
     }
 
     ~IntegrationTestSetup() {
@@ -46,7 +42,8 @@ public:
     }
 
     void insert_student_direct(int id, const std::string& name, float gpa) {
-        insert_test_data(*storage, "Student", id, name, gpa);
+        // All components are singletons, use get_instance()
+        insert_test_data(mdbms::sm::StorageEngine::get_instance(), "Student", id, name, gpa);
     }
 };
 
@@ -56,11 +53,8 @@ public:
 bool test_basic_integration() {
     std::cout << "\n=== TEST 1: Basic Integration (QP + QO + SM + CCM + FRM) ===" << std::endl;
 
-    auto optimizer = std::make_shared<mdbms::qo::OptimizationEngine>();
-    auto storage = std::make_shared<mdbms::sm::StorageEngine>();
-    // CCM and FRM are singletons, pass nullptr and let QueryProcessor use get_instance()
-
-    mdbms::qp::QueryProcessor qp(optimizer, storage, nullptr, nullptr);
+    // All components are singletons, QueryProcessor uses get_instance() for all
+    mdbms::qp::QueryProcessor qp;
 
     const std::string query = "SELECT * FROM Student";
     std::ostringstream captured_output;
@@ -152,14 +146,15 @@ bool test_query_optimizer_integration() {
     }
 
     // Test 3: Verify query tree is created
-    mdbms::qo::ParsedQuery parsed = setup.optimizer->parse_query(select_query);
+    // All components are singletons, use get_instance()
+    mdbms::qo::ParsedQuery parsed = mdbms::qo::OptimizationEngine::get_instance().parse_query(select_query);
     if (!parsed.query_tree) {
         std::cerr << "[FAIL] Query tree not created" << std::endl;
         return false;
     }
 
     // Test 4: Verify optimization is performed
-    mdbms::qo::ParsedQuery optimized = setup.optimizer->optimize_query(parsed);
+    mdbms::qo::ParsedQuery optimized = mdbms::qo::OptimizationEngine::get_instance().optimize_query(parsed);
     if (!optimized.query_tree) {
         std::cerr << "[FAIL] Optimized query tree not created" << std::endl;
         return false;

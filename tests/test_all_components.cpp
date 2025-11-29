@@ -237,14 +237,13 @@ bool test_query_optimizer_pipeline() {
 
 bool test_query_processor_select_flow() {
     ScopedDataDir dir("qp_component");
-    auto optimizer = std::make_shared<mdbms::qo::OptimizationEngine>();
-    auto storage = std::make_shared<mdbms::sm::StorageEngine>(dir.str());
+    // All components are singletons, QueryProcessor uses get_instance() for all
+    mdbms::qp::QueryProcessor processor;
 
-    mdbms::qp::QueryProcessor processor(optimizer, storage, nullptr, nullptr);
-
-    insert_student(*storage, 201, "Celine", 3.90f);
-    insert_student(*storage, 202, "Darren", 3.10f);
-    insert_student(*storage, 203, "Eve", 3.70f);
+    // All components are singletons, use get_instance()
+    insert_student(mdbms::sm::StorageEngine::get_instance(), 201, "Celine", 3.90f);
+    insert_student(mdbms::sm::StorageEngine::get_instance(), 202, "Darren", 3.10f);
+    insert_student(mdbms::sm::StorageEngine::get_instance(), 203, "Eve", 3.70f);
 
     print_section("Query Processor - SELECT *");
     auto result = processor.execute_query("SELECT * FROM Student");

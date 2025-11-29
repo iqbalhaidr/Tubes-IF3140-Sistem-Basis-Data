@@ -21,3 +21,11 @@ target_link_libraries(test_integration
     fr_lib
 )
 target_include_directories(test_integration PRIVATE ${PROJECT_SOURCE_DIR}/include)
+
+add_executable(test_failure_recovery test_failure_recovery.cpp)
+target_link_libraries(test_failure_recovery
+    PRIVATE
+    fr_lib
+    sm_lib
+)
+target_include_directories(test_failure_recovery PRIVATE ${PROJECT_SOURCE_DIR}/include)
