@@ -1,22 +1,23 @@
-#include "query_optimizer.h"
-#include "query_processor.h"
-#include "storage_manager.h"
-#include "concurrency_control.h"
-#include "failure_recovery.h"
-
 #include <filesystem>
 #include <functional>
 #include <iostream>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
+
+#include "concurrency_control.h"
+#include "failure_recovery.h"
+#include "query_optimizer.h"
+#include "query_processor.h"
+#include "storage_manager.h"
 
 namespace fs = std::filesystem;
 
 namespace {
 
 class ScopedDataDir {
-public:
+   public:
     explicit ScopedDataDir(const std::string& name) {
         fs::path artifacts_root = fs::current_path() / "test_artifacts";
         std::error_code ec;
@@ -36,7 +37,7 @@ public:
         return path_.string();
     }
 
-private:
+   private:
     fs::path path_;
 };
 
@@ -44,20 +45,13 @@ void print_section(const std::string& title) {
     std::cout << "\n========== " << title << " ==========" << std::endl;
 }
 
-void insert_student(mdbms::sm::StorageEngine& storage,
-                    int id,
-                    const std::string& name,
-                    float gpa) {
+void insert_student(mdbms::sm::StorageEngine& storage, int id, const std::string& name, float gpa) {
     mdbms::DataWrite<mdbms::Row> insert;
     insert.table = "Student";
     insert.is_insert = true;
     insert.new_value.table_name = "Student";
     insert.new_value.row_id = id;
-    insert.new_value.columns = {
-        {"StudentID", id},
-        {"FullName", name},
-        {"GPA", gpa}
-    };
+    insert.new_value.columns = {{"id", id}, {"name", name}, {"gpa", gpa}};
 
     storage.write_block(insert);
 }
@@ -85,8 +79,7 @@ void print_rows(const mdbms::Rows<mdbms::Row>& rows, const std::string& title) {
     }
 }
 
-void print_query_tree(const mdbms::qo::QueryTree* node,
-                      const std::string& prefix = "",
+void print_query_tree(const mdbms::qo::QueryTree* node, const std::string& prefix = "",
                       bool is_last = true) {
     if (!node) {
         return;
@@ -214,18 +207,17 @@ bool test_query_optimizer_pipeline() {
     print_query_tree(optimized.query_tree);
 
     bool saw_select = false;
-    std::function<void(const mdbms::qo::QueryTree*)> dfs =
-        [&](const mdbms::qo::QueryTree* node) {
-            if (!node) {
-                return;
-            }
-            if (node->type == "SELECT") {
-                saw_select = true;
-            }
-            for (const auto* child : node->children) {
-                dfs(child);
-            }
-        };
+    std::function<void(const mdbms::qo::QueryTree*)> dfs = [&](const mdbms::qo::QueryTree* node) {
+        if (!node) {
+            return;
+        }
+        if (node->type == "SELECT") {
+            saw_select = true;
+        }
+        for (const auto* child : node->children) {
+            dfs(child);
+        }
+    };
     dfs(optimized.query_tree);
 
     if (!saw_select) {
@@ -336,11 +328,7 @@ bool test_failure_recovery_logging() {
     mdbms::Row inserted_row;
     inserted_row.table_name = "Student";
     inserted_row.row_id = 900;
-    inserted_row.columns = {
-        {"StudentID", 900},
-        {"FullName", std::string("Frank")},
-        {"GPA", 3.60f}
-    };
+    inserted_row.columns = {{"StudentID", 900}, {"FullName", std::string("Frank")}, {"GPA", 3.60f}};
     insert.data.data.push_back(inserted_row);
     insert.data.rows_count = 1;
     frm.write_log(insert);
@@ -359,8 +347,8 @@ bool test_failure_recovery_logging() {
     frm.recover(criteria);
 
     bool exists = fs::exists(log_path);
-    std::cout << "Failure Recovery log file " << (exists ? "exists" : "missing")
-              << " at " << log_path << std::endl;
+    std::cout << "Failure Recovery log file " << (exists ? "exists" : "missing") << " at "
+              << log_path << std::endl;
     return exists;
 }
 
@@ -369,6 +357,160 @@ bool test_failure_recovery_logging() {
 // cmake -S . -B build
 // cd build && ctest -R test_all_components --output-on-failure
 
+bool test_query_processor_multithread_concurrency() {
+    print_section("Query Processor - TIMESTAMP CONFLICT TEST");
+
+    auto& storage = mdbms::sm::StorageEngine::get_instance();
+    auto& manager = mdbms::ccm::ConcurrencyControlManager::get_instance();
+    mdbms::qp::QueryProcessor processor;
+
+    manager.switch_algorithm("timestamp");
+
+    // Setup data awal
+    insert_student(storage, 500, "Race", 2.0f);
+
+    const int THREADS = 2;
+    std::vector<std::string> logs(THREADS);
+    std::vector<bool> results(THREADS);
+
+    auto worker = [&](int id) {
+        std::stringstream ss;
+
+        // Mulai 1 transaksi per thread
+        processor.execute_query("BEGIN;");
+
+        ss << "[Thread " << id << "] SELECT\n";
+        processor.execute_query("SELECT * FROM Student WHERE id=500;");
+
+        // Delay untuk memaksa Thread 0 kalah
+        if (id == 0)
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        else
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+
+        std::string update = id == 0 ? "UPDATE Student SET gpa=3.0 WHERE id=500;"
+                                     : "UPDATE Student SET gpa=4.0 WHERE id=500;";
+
+        ss << "[Thread " << id << "] UPDATE\n";
+        auto res = processor.execute_query(update);
+
+        bool ok = res.success;
+        ss << "[Thread " << id << "] RESULT => " << (ok ? "WRITE ALLOWED" : "WRITE REJECTED")
+           << "\n";
+
+        // Commit transaksi
+        processor.execute_query("COMMIT;");
+
+        logs[id] = ss.str();
+        results[id] = ok;
+    };
+
+    // Jalankan threads
+    std::vector<std::thread> threads;
+    for (int i = 0; i < THREADS; i++)
+        threads.emplace_back([&, i]() { worker(i); });
+
+    for (auto& t : threads)
+        t.join();
+
+    // Print output lengkap
+    std::cout << "\n========== THREAD LOG OUTPUT ==========\n";
+    for (auto& log : logs)
+        std::cout << log;
+
+    std::cout << "\n=== CONFLICT SUMMARY ===\n";
+    for (int i = 0; i < THREADS; i++)
+        std::cout << "Thread " << i << ": " << (results[i] ? "WRITE OK" : "WRITE REJECTED") << "\n";
+
+    return true;
+}
+
+bool test_query_processor_multithread_timestamp_conflict() {
+    print_section("Query Processor - TIMESTAMP CONFLICT TEST");
+
+    auto& storage = mdbms::sm::StorageEngine::get_instance();
+    auto& manager = mdbms::ccm::ConcurrencyControlManager::get_instance();
+    mdbms::qp::QueryProcessor processor;
+
+    manager.switch_algorithm("timestamp");
+
+    // Setup data awal
+    insert_student(storage, 500, "Race", 2.0f);
+
+    const int THREADS = 3;
+    std::vector<std::string> logs(THREADS);
+    std::vector<bool> results(THREADS);
+
+    auto worker = [&](int id) {
+        std::stringstream ss;
+
+        // Mulai transaksi
+        processor.execute_query("BEGIN;");
+
+        ss << "[Thread " << id << "] SELECT\n";
+        processor.execute_query("SELECT * FROM Student WHERE id=500;");
+
+        // Delay untuk memaksa konflik timestamp
+        switch (id) {
+            case 0:
+                std::this_thread::sleep_for(std::chrono::milliseconds(400));
+                break;
+            case 1:
+                std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                break;
+            case 2:
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                break;
+        }
+
+        std::string update;
+        switch (id) {
+            case 0:
+                update = "UPDATE Student SET gpa=3.0 WHERE id=500;";
+                break;
+            case 1:
+                update = "UPDATE Student SET gpa=4.0 WHERE id=500;";
+                break;
+            case 2:
+                update = "UPDATE Student SET gpa=4.5 WHERE id=500;";
+                break;
+        }
+
+        ss << "[Thread " << id << "] UPDATE\n";
+        auto res = processor.execute_query(update);
+
+        bool ok = res.success;
+        ss << "[Thread " << id << "] RESULT => " << (ok ? "WRITE ALLOWED" : "WRITE REJECTED")
+           << "\n";
+
+        // Commit transaksi
+        processor.execute_query("COMMIT;");
+
+        logs[id] = ss.str();
+        results[id] = ok;
+    };
+
+    // Jalankan threads
+    std::vector<std::thread> threads;
+    for (int i = 0; i < THREADS; i++)
+        threads.emplace_back([&, i]() { worker(i); });
+
+    for (auto& t : threads)
+        t.join();
+
+    // Print output lengkap
+    std::cout << "\n========== THREAD LOG OUTPUT ==========\n";
+    for (auto& log : logs)
+        std::cout << log;
+
+    std::cout << "\n=== CONFLICT SUMMARY ===\n";
+    for (int i = 0; i < THREADS; i++)
+        std::cout << "Thread " << i << ": " << (results[i] ? "WRITE OK" : "WRITE REJECTED") << "\n";
+
+    bool pass = (results[0] == false && results[1] == true && results[2] == true);
+
+    return pass;
+}
 
 int main() {
     const std::vector<std::pair<std::string, std::function<bool()>>> tests = {
@@ -376,7 +518,10 @@ int main() {
         {"Query Optimizer pipeline", test_query_optimizer_pipeline},
         {"Query Processor SELECT flow", test_query_processor_select_flow},
         {"Concurrency Control timestamp protocol", test_concurrency_control_timestamp},
-        {"Failure Recovery logging/recover", test_failure_recovery_logging}
+        {"Failure Recovery logging/recover", test_failure_recovery_logging},
+        {"Query Processor multithread concurrency", test_query_processor_multithread_concurrency},
+        {"Query Processor multithread timestamp conflict",
+         test_query_processor_multithread_timestamp_conflict},
     };
 
     int passed = 0;
@@ -398,6 +543,7 @@ int main() {
         }
     }
 
-    std::cout << "\nPassed " << passed << " of " << tests.size() << " component tests." << std::endl;
+    std::cout << "\nPassed " << passed << " of " << tests.size() << " component tests."
+              << std::endl;
     return passed == static_cast<int>(tests.size()) ? 0 : 1;
 }

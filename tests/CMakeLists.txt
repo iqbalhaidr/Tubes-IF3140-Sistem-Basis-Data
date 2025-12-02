@@ -11,6 +11,7 @@ add_executable(test_concurrency_control test_concurrency_control.cpp)
 target_link_libraries(test_concurrency_control ccm_lib)
 target_include_directories(test_concurrency_control PRIVATE ${PROJECT_SOURCE_DIR}/include)
 
+
 add_executable(test_integration test_integration.cpp)
 target_link_libraries(test_integration
     PRIVATE
@@ -29,3 +30,19 @@ target_link_libraries(test_failure_recovery
     sm_lib
 )
 target_include_directories(test_failure_recovery PRIVATE ${PROJECT_SOURCE_DIR}/include)
+
+add_executable(test_all_components test_all_components.cpp)
+
+target_link_libraries(test_all_components
+    PRIVATE
+    qp_lib        # Query Processor
+    qo_lib        # Query Optimizer
+    sm_lib        # Storage Manager
+    ccm_lib       # Concurrency Control Manager
+    fr_lib        # Failure Recovery
+)
+
+target_include_directories(test_all_components PRIVATE ${PROJECT_SOURCE_DIR}/include)
+
+add_test(NAME test_all_components COMMAND test_all_components)
+
