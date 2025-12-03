@@ -46,6 +46,9 @@ public:
     
     // Get maximum page_id for a table (includes buffer + disk)
     int get_max_page_id(const std::string& table_name);
+    
+    // Clear all buffer pool (for testing purposes)
+    void clear_buffer();
 
     // Calculate page_id from absolute offset
     static int offset_to_page_id(int64_t offset) { return static_cast<int>(offset / PAGE_SIZE); }
@@ -119,6 +122,9 @@ public:
     std::vector<std::string> get_column_names(const std::string& table);
     bool drop_table(const std::string& table);
     static StorageEngine& get_instance();
+    
+    // For testing: clear buffer pool
+    void clear_buffer_for_testing();
 
     
 private:
