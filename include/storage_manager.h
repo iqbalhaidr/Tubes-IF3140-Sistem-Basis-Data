@@ -86,12 +86,22 @@ public:
     std::unordered_map<std::string, std::string> table_index;      // table -> column
     std::unordered_map<std::string, IndexType> table_index_type;   // table -> type
 
+    // Hash Index methods
     void build_hash_index(const TableSchema& schema, const std::string& table, const std::string& column);
+    bool lookup_hash(const std::string& table, const std::string& column, const std::any& operand, std::vector<int64_t>& out_offsets);
+    
+    // B+ Tree Index methods
+    void build_bptree_index(const TableSchema& schema, const std::string& table, const std::string& column);
+    bool lookup_bptree(const std::string& table, const std::string& column, const std::any& operand, std::vector<int64_t>& out_offsets);
+    void update_bptree_after_insert(const std::string& table, const std::string& column, int64_t row_offset, const Row& row);
+    void update_bptree_after_delete(const std::string& table, const std::string& column, int64_t row_offset, const Row& old_row);
+    void update_bptree_after_update(const std::string& table, const std::string& column, int64_t row_offset, const Row& old_row, const Row& new_row);
+    
+    // Generic index methods (auto-detect index type)
     void update_index_after_insert(const std::string& table, const std::string& column, int64_t row_offset, const Row& row);
     void update_index_after_update(const std::string& table, const std::string& column, int64_t row_offset, const Row& old_row, const Row& new_row);
     void update_index_after_delete(const std::string& table, const std::string& column, int64_t row_offset, const Row& old_row);
     bool lookup_index(const std::string& table, const std::string& column, const std::any& operand, std::vector<int64_t>& out_offsets);
-    bool lookup_hash(const std::string& table, const std::string& column, const std::any& operand, std::vector<int64_t>& out_offsets);
 
 private:
     std::string data_dir_;
