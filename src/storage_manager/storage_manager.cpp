@@ -1209,10 +1209,12 @@ void StorageEngine::set_index(const std::string& table, const std::string& colum
     }
 
     if (index_type == IndexType::HASH) {
+        std::cout << "SM: Building HASH index for " << table << "." << column << std::endl;
         hash_index_engine.build_hash_index(schema, table, column);
-    } else {
-        // TODO: call b+tree here
-    };
+    } else if (index_type == IndexType::BTREE) {
+        std::cout << "SM: Building B+ Tree index for " << table << "." << column << std::endl;
+        hash_index_engine.build_bptree_index(schema, table, column);
+    }
 }
 
 std::string StorageEngine::to_string_any(const std::any& a) {
