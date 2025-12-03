@@ -475,8 +475,363 @@ int main() {
     }
 
     std::cout << "Test 19 OK . (maap perlu cek manual si)\n";
+    
 
-    std::cout << "\n===== SEMUA TEST LULUS =====\n";
+    std::cout << "\n\n========================================\n";
+    std::cout << "=== B+ TREE INDEX TESTS ===\n";
+    std::cout << "========================================\n";
+
+    // TEST 20: CREATE NEW TABLE FOR B+ TREE TESTS
+    std::cout << "\n--- TEST 20: CREATE TABLE FOR B+ TREE ---\n";
+    
+    TableSchema product_schema;
+    product_schema.table_name = "Product";
+    product_schema.column_names = {"ProductID", "ProductName", "Price", "Stock"};
+    product_schema.column_types = {DataType::INTEGER, DataType::VARCHAR, DataType::FLOAT, DataType::INTEGER};
+    product_schema.column_sizes = {0, 100, 0, 0};
+    product_schema.primary_key = "ProductID";
+    product_schema.foreign_keys = {};
+    sm.create_table(product_schema);
+    
+    std::cout << "Test 20 OK.\n";
+
+    // TEST 21: INSERT DATA FOR B+ TREE
+    std::cout << "\n--- TEST 21: INSERT PRODUCT DATA ---\n";
+    
+    auto insert_product = [&](int id, std::string name, float price, int stock) {
+        DataWrite<Row> w;
+        w.table = "Product";
+        w.new_value.table_name = "Product";
+        w.new_value.columns = {
+            {"ProductID", id},
+            {"ProductName", name},
+            {"Price", price},
+            {"Stock", stock}
+        };
+        assert(sm.write_block(w) == 1);
+    };
+    
+    // Insert 20 products with various IDs
+    insert_product(500, "Laptop", 15000000.0f, 10);
+    insert_product(100, "Mouse", 150000.0f, 50);
+    insert_product(300, "Keyboard", 500000.0f, 30);
+    insert_product(200, "Monitor", 2500000.0f, 15);
+    insert_product(400, "Headset", 750000.0f, 25);
+    insert_product(150, "USB Cable", 50000.0f, 100);
+    insert_product(250, "HDMI Cable", 75000.0f, 80);
+    insert_product(350, "Webcam", 1200000.0f, 20);
+    insert_product(450, "Microphone", 950000.0f, 18);
+    insert_product(550, "Speakers", 1800000.0f, 12);
+    
+    // Insert duplicates for testing
+    insert_product(300, "Keyboard Wireless", 650000.0f, 22);
+    insert_product(300, "Keyboard Gaming", 1200000.0f, 15);
+    insert_product(100, "Mouse Wireless", 200000.0f, 40);
+    
+    // More products
+    insert_product(600, "Tablet", 5000000.0f, 8);
+    insert_product(700, "Smartphone", 8000000.0f, 5);
+    insert_product(800, "Smartwatch", 3500000.0f, 10);
+    insert_product(50, "Power Bank", 350000.0f, 60);
+    insert_product(650, "Router", 850000.0f, 25);
+    insert_product(750, "Switch Hub", 450000.0f, 30);
+    insert_product(850, "External HDD", 1500000.0f, 18);
+    
+    std::cout << "Test 21 OK (20 products inserted).\n";
+
+    // TEST 22: BUILD B+ TREE INDEX
+    std::cout << "\n--- TEST 22: BUILD B+ TREE INDEX (ProductID) ---\n";
+    
+    // Flush buffer to disk before building index
+    std::cout << "Flushing buffer to disk...\n";
+    sm.checkpoint();
+    
+    sm.set_index("Product", "ProductID", IndexType::BTREE);
+    
+    std::string bptree_index_file = test_dir + "/Product.ProductID.bpt";
+    assert(std::filesystem::exists(bptree_index_file));
+    
+    std::cout << "Test 22 OK (B+ Tree index file created).\n";
+
+    // TEST 23: B+ TREE INDEX SCAN - SINGLE VALUE
+    std::cout << "\n--- TEST 23: B+ TREE INDEX SCAN (ProductID = 300) ---\n";
+    
+    DataRetrieval read_bpt_single;
+    read_bpt_single.table = "Product";
+    read_bpt_single.columns = {"ProductName", "Price"};
+    read_bpt_single.conditions = { Condition("ProductID", "=", 300) };
+    read_bpt_single.search_type = SearchType::INDEX_SCAN;
+    read_bpt_single.index_column = "ProductID";
+    
+    Rows<Row> rows_300 = sm.read_block(read_bpt_single);
+    print_rows(rows_300);
+    
+    // Should return 3 rows (Keyboard, Keyboard Wireless, Keyboard Gaming)
+    assert(rows_300.rows_count == 3);
+    
+    std::set<std::string> product_names;
+    for (auto& row : rows_300.data) {
+        product_names.insert(std::any_cast<std::string>(row.columns.at("ProductName")));
+    }
+    
+    assert(product_names.count("Keyboard") == 1);
+    assert(product_names.count("Keyboard Wireless") == 1);
+    assert(product_names.count("Keyboard Gaming") == 1);
+    
+    std::cout << "Test 23 OK (B+ Tree returns all duplicates).\n";
+
+    // TEST 24: B+ TREE INDEX SCAN - DIFFERENT VALUES
+    std::cout << "\n--- TEST 24: B+ TREE INDEX SCAN (ProductID = 500) ---\n";
+    
+    DataRetrieval read_bpt_500;
+    read_bpt_500.table = "Product";
+    read_bpt_500.columns = {"ProductName", "Price", "Stock"};
+    read_bpt_500.conditions = { Condition("ProductID", "=", 500) };
+    read_bpt_500.search_type = SearchType::INDEX_SCAN;
+    read_bpt_500.index_column = "ProductID";
+    
+    Rows<Row> rows_500 = sm.read_block(read_bpt_500);
+    print_rows(rows_500);
+    
+    assert(rows_500.rows_count == 1);
+    assert(std::any_cast<std::string>(rows_500.data[0].columns.at("ProductName")) == "Laptop");
+    assert(std::any_cast<float>(rows_500.data[0].columns.at("Price")) == 15000000.0f);
+    
+    std::cout << "Test 24 OK (B+ Tree single value lookup).\n";
+
+    // TEST 25: B+ TREE INDEX SCAN - NON-EXISTENT VALUE
+    std::cout << "\n--- TEST 25: B+ TREE INDEX SCAN (ProductID = 9999) ---\n";
+    
+    DataRetrieval read_bpt_none;
+    read_bpt_none.table = "Product";
+    read_bpt_none.columns = {"*"};
+    read_bpt_none.conditions = { Condition("ProductID", "=", 9999) };
+    read_bpt_none.search_type = SearchType::INDEX_SCAN;
+    read_bpt_none.index_column = "ProductID";
+    
+    Rows<Row> rows_none = sm.read_block(read_bpt_none);
+    print_rows(rows_none);
+    
+    assert(rows_none.rows_count == 0);
+    
+    std::cout << "Test 25 OK (B+ Tree handles non-existent keys).\n";
+
+    // TEST 26: B+ TREE CONSISTENCY AFTER INSERT
+    std::cout << "\n--- TEST 26: B+ TREE CONSISTENCY AFTER INSERT ---\n";
+    
+    insert_product(900, "Gaming Chair", 2500000.0f, 5);
+    insert_product(950, "Standing Desk", 3500000.0f, 3);
+    
+    DataRetrieval read_bpt_900;
+    read_bpt_900.table = "Product";
+    read_bpt_900.columns = {"ProductName", "Price"};
+    read_bpt_900.conditions = { Condition("ProductID", "=", 900) };
+    read_bpt_900.search_type = SearchType::INDEX_SCAN;
+    read_bpt_900.index_column = "ProductID";
+    
+    Rows<Row> rows_900 = sm.read_block(read_bpt_900);
+    print_rows(rows_900);
+    
+    assert(rows_900.rows_count == 1);
+    assert(std::any_cast<std::string>(rows_900.data[0].columns.at("ProductName")) == "Gaming Chair");
+    
+    std::cout << "Test 26 OK (B+ Tree index updated after insert).\n";
+
+    // TEST 27: B+ TREE CONSISTENCY AFTER DELETE
+    std::cout << "\n--- TEST 27: B+ TREE CONSISTENCY AFTER DELETE ---\n";
+    
+    // Delete one of the ProductID=300 entries
+    DataDeletion delete_kbd_wireless;
+    delete_kbd_wireless.table = "Product";
+    delete_kbd_wireless.conditions = { Condition("ProductName", "=", std::string("Keyboard Wireless")) };
+    
+    assert(sm.delete_block(delete_kbd_wireless) == 1);
+    
+    // Query again for ProductID=300
+    Rows<Row> rows_300_after = sm.read_block(read_bpt_single);
+    print_rows(rows_300_after);
+    
+    // Should now return only 2 rows
+    assert(rows_300_after.rows_count == 2);
+    
+    std::set<std::string> names_after_del;
+    for (auto& row : rows_300_after.data) {
+        names_after_del.insert(std::any_cast<std::string>(row.columns.at("ProductName")));
+    }
+    
+    assert(names_after_del.count("Keyboard Wireless") == 0);
+    assert(names_after_del.count("Keyboard") == 1);
+    assert(names_after_del.count("Keyboard Gaming") == 1);
+    
+    std::cout << "Test 27 OK (B+ Tree index updated after delete).\n";
+
+    // TEST 28: B+ TREE CONSISTENCY AFTER UPDATE (KEY CHANGE)
+    std::cout << "\n--- TEST 28: B+ TREE CONSISTENCY AFTER UPDATE ---\n";
+    
+    // Update ProductID 100 -> 1000
+    DataWrite<Row> update_mouse_id;
+    update_mouse_id.table = "Product";
+    update_mouse_id.conditions = { Condition("ProductName", "=", std::string("Mouse")) };
+    update_mouse_id.columns = {"ProductID"};
+    update_mouse_id.new_value.columns = { {"ProductID", 1000} };
+    
+    assert(sm.write_block(update_mouse_id) == 1);
+    
+    // Query with old key (should return only "Mouse Wireless")
+    DataRetrieval read_bpt_100;
+    read_bpt_100.table = "Product";
+    read_bpt_100.columns = {"ProductName", "Price"};
+    read_bpt_100.conditions = { Condition("ProductID", "=", 100) };
+    read_bpt_100.search_type = SearchType::INDEX_SCAN;
+    read_bpt_100.index_column = "ProductID";
+    
+    Rows<Row> rows_100_old = sm.read_block(read_bpt_100);
+    print_rows(rows_100_old);
+    
+    assert(rows_100_old.rows_count == 1);
+    assert(std::any_cast<std::string>(rows_100_old.data[0].columns.at("ProductName")) == "Mouse Wireless");
+    
+    // Query with new key
+    DataRetrieval read_bpt_1000;
+    read_bpt_1000.table = "Product";
+    read_bpt_1000.columns = {"ProductName", "Price"};
+    read_bpt_1000.conditions = { Condition("ProductID", "=", 1000) };
+    read_bpt_1000.search_type = SearchType::INDEX_SCAN;
+    read_bpt_1000.index_column = "ProductID";
+    
+    Rows<Row> rows_1000 = sm.read_block(read_bpt_1000);
+    print_rows(rows_1000);
+    
+    assert(rows_1000.rows_count == 1);
+    assert(std::any_cast<std::string>(rows_1000.data[0].columns.at("ProductName")) == "Mouse");
+    
+    std::cout << "Test 28 OK (B+ Tree index updated after key change).\n";
+
+    // TEST 29: BUILD B+ TREE INDEX ON VARCHAR COLUMN
+    std::cout << "\n--- TEST 29: BUILD B+ TREE INDEX (ProductName VARCHAR) ---\n";
+    
+    // Flush buffer to disk
+    sm.checkpoint();
+    
+    sm.set_index("Product", "ProductName", IndexType::BTREE);
+    
+    std::string bptree_name_file = test_dir + "/Product.ProductName.bpt";
+    assert(std::filesystem::exists(bptree_name_file));
+    
+    std::cout << "Test 29 OK (B+ Tree VARCHAR index created).\n";
+
+    // TEST 30: B+ TREE INDEX SCAN ON VARCHAR
+    std::cout << "\n--- TEST 30: B+ TREE INDEX SCAN (ProductName = 'Laptop') ---\n";
+    
+    DataRetrieval read_bpt_name;
+    read_bpt_name.table = "Product";
+    read_bpt_name.columns = {"ProductID", "Price", "Stock"};
+    read_bpt_name.conditions = { Condition("ProductName", "=", std::string("Laptop")) };
+    read_bpt_name.search_type = SearchType::INDEX_SCAN;
+    read_bpt_name.index_column = "ProductName";
+    
+    Rows<Row> rows_laptop = sm.read_block(read_bpt_name);
+    print_rows(rows_laptop);
+    
+    assert(rows_laptop.rows_count == 1);
+    assert(std::any_cast<int>(rows_laptop.data[0].columns.at("ProductID")) == 500);
+    assert(std::any_cast<float>(rows_laptop.data[0].columns.at("Price")) == 15000000.0f);
+    
+    std::cout << "Test 30 OK (B+ Tree VARCHAR index works).\n";
+
+    // TEST 31: COMPARE B+ TREE VS HASH INDEX PERFORMANCE
+    std::cout << "\n--- TEST 31: B+ TREE VS HASH INDEX COMPARISON ---\n";
+    
+    // Create another table for comparison
+    TableSchema test_schema;
+    test_schema.table_name = "TestPerf";
+    test_schema.column_names = {"ID", "Value"};
+    test_schema.column_types = {DataType::INTEGER, DataType::INTEGER};
+    test_schema.column_sizes = {0, 0};
+    test_schema.primary_key = "ID";
+    test_schema.foreign_keys = {};
+    sm.create_table(test_schema);
+    
+    // Insert 100 records
+    for (int i = 1; i <= 100; i++) {
+        DataWrite<Row> w;
+        w.table = "TestPerf";
+        w.new_value.table_name = "TestPerf";
+        w.new_value.columns = {
+            {"ID", i},
+            {"Value", i * 10}
+        };
+        sm.write_block(w);
+    }
+    
+    // Build both indexes (flush first to ensure data is on disk)
+    sm.checkpoint();
+    sm.set_index("TestPerf", "ID", IndexType::BTREE);
+    sm.set_index("TestPerf", "Value", IndexType::HASH);
+    
+    std::string bpt_perf = test_dir + "/TestPerf.ID.bpt";
+    std::string hash_perf = test_dir + "/TestPerf.Value.hashidx";
+    
+    assert(std::filesystem::exists(bpt_perf));
+    assert(std::filesystem::exists(hash_perf));
+    
+    // Test B+ Tree lookup
+    DataRetrieval read_bpt_perf;
+    read_bpt_perf.table = "TestPerf";
+    read_bpt_perf.columns = {"Value"};
+    read_bpt_perf.conditions = { Condition("ID", "=", 50) };
+    read_bpt_perf.search_type = SearchType::INDEX_SCAN;
+    read_bpt_perf.index_column = "ID";
+    
+    Rows<Row> bpt_result = sm.read_block(read_bpt_perf);
+    assert(bpt_result.rows_count == 1);
+    assert(std::any_cast<int>(bpt_result.data[0].columns.at("Value")) == 500);
+    
+    // Test Hash lookup
+    DataRetrieval read_hash_perf;
+    read_hash_perf.table = "TestPerf";
+    read_hash_perf.columns = {"ID"};
+    read_hash_perf.conditions = { Condition("Value", "=", 500) };
+    read_hash_perf.search_type = SearchType::INDEX_SCAN;
+    read_hash_perf.index_column = "Value";
+    
+    Rows<Row> hash_result = sm.read_block(read_hash_perf);
+    assert(hash_result.rows_count == 1);
+    assert(std::any_cast<int>(hash_result.data[0].columns.at("ID")) == 50);
+    
+    std::cout << "Test 31 OK (Both B+ Tree and Hash indexes work correctly).\n";
+
+    // TEST 32: B+ TREE WITH FLOAT KEYS
+    std::cout << "\n--- TEST 32: B+ TREE INDEX ON FLOAT COLUMN ---\n";
+    
+    // Flush buffer to disk
+    sm.checkpoint();
+    
+    sm.set_index("Product", "Price", IndexType::BTREE);
+    
+    std::string bptree_price_file = test_dir + "/Product.Price.bpt";
+    assert(std::filesystem::exists(bptree_price_file));
+    
+    // Search by price
+    DataRetrieval read_bpt_price;
+    read_bpt_price.table = "Product";
+    read_bpt_price.columns = {"ProductName", "Stock"};
+    read_bpt_price.conditions = { Condition("Price", "=", 750000.0f) };
+    read_bpt_price.search_type = SearchType::INDEX_SCAN;
+    read_bpt_price.index_column = "Price";
+    
+    Rows<Row> rows_price = sm.read_block(read_bpt_price);
+    print_rows(rows_price);
+    
+    assert(rows_price.rows_count >= 1);
+    
+    std::cout << "Test 32 OK (B+ Tree FLOAT index works).\n";
+
+    std::cout << "\n========================================\n";
+    std::cout << "=== ALL B+ TREE TESTS PASSED! ===\n";
+    std::cout << "========================================\n";
+
+    std::cout << "\n===== SEMUA TEST LULUS (HASH + B+ TREE) =====\n";
     return 0;
     
 }
