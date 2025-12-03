@@ -476,15 +476,16 @@ TableSchema StorageEngine::get_table_schema(const std::string& table) {
 }
 
 bool StorageEngine::create_table(const TableSchema& schema) {
+    if (!check_and_update_tables_metadata(schema)) {
+        return false;
+    }
+
     std::string schema_filename = data_dir_ + "/" + schema.table_name + ".schema";
     std::ofstream outfile(schema_filename, std::ios::binary | std::ios::trunc);
     if (!outfile.is_open()) {
         std::cerr << "SM: Gagal membuka file schema untuk tabel: " << schema.table_name << std::endl;
         throw std::runtime_error("Gagal membuka file schema");
     }
-
-    // update tables.meta
-    if (!check_and_update_tables_metadata(schema)) return false;
     
     // write number of columns (aint no way number of columns exceed 2^16)
     uint16_t columns_len = schema.column_names.size();
@@ -614,12 +615,31 @@ bool StorageEngine::check_and_update_tables_metadata(const TableSchema& schema) 
             throw std::runtime_error("Gagal membuka file tables_temp.meta");
         }
         
+        if (tables_infile.peek() == EOF) {
+            // File exists but is empty, treat as if no tables exist
+            tables_infile.close();
+            tables_outfile.close();
+            std::remove(tables_out_filename.c_str());
+            std::ofstream new_tables_file(tables_in_filename, std::ios::binary | std::ios::trunc);
+            if (!new_tables_file.is_open()) {
+                throw std::runtime_error("Gagal membuka file tables.meta");
+            }
+            uint16_t tables_len = 1;
+            new_tables_file.write(reinterpret_cast<const char*>(&tables_len), sizeof(tables_len));
+            uint32_t table_name_len = static_cast<uint32_t>(schema.table_name.length());
+            new_tables_file.write(reinterpret_cast<const char*>(&table_name_len), sizeof(table_name_len));
+            new_tables_file.write(schema.table_name.c_str(), table_name_len);
+            new_tables_file.close();
+            return true;
+        }
 
         // read existing tables
         uint16_t tables_len;
         tables_infile.read(reinterpret_cast<char*>(&tables_len), sizeof(tables_len));
         if (tables_infile.gcount() != sizeof(tables_len) || !tables_infile) {
             std::cerr << "SM: Error membaca jumlah nama table pada file tables.meta" << std::endl;
+            tables_infile.close();
+            tables_outfile.close();
             throw std::runtime_error("File tables.meta korup dan gagal dibaca");
         }
 
@@ -644,7 +664,10 @@ bool StorageEngine::check_and_update_tables_metadata(const TableSchema& schema) 
         // add table
         auto it = std::find(tables_name.begin(), tables_name.end(), schema.table_name);
         if (it != tables_name.end()) {
-            result = false;
+            tables_infile.close();
+            tables_outfile.close();
+            std::remove(tables_out_filename.c_str());
+            return false;
         }
         else {
             tables_name.push_back(schema.table_name);
@@ -654,6 +677,9 @@ bool StorageEngine::check_and_update_tables_metadata(const TableSchema& schema) 
         tables_outfile.write(reinterpret_cast<const char*>(&tables_len), sizeof(tables_len));
         if (!tables_outfile) {
             std::cerr << "SM: Error menulis nama tabel ke file tables.meta" << std::endl;
+            tables_infile.close();
+            tables_outfile.close();
+            std::remove(tables_out_filename.c_str());
             throw std::runtime_error("Gagal menulis nama tabel ke file tables.meta");
         }
 
@@ -662,11 +688,17 @@ bool StorageEngine::check_and_update_tables_metadata(const TableSchema& schema) 
             tables_outfile.write(reinterpret_cast<const char*>(&table_name_len), sizeof(table_name_len));
             if (!tables_outfile) {
                 std::cerr << "SM: Error menulis panjang nama kolom ke file." << std::endl;
+                tables_infile.close();
+                tables_outfile.close();
+                std::remove(tables_out_filename.c_str());
                 throw std::runtime_error("Gagal menulis panjang nama kolom ke file");
             }
             tables_outfile.write(table_name.c_str(), table_name_len);
             if (!tables_outfile) {
                 std::cerr << "SM: Error menulis nama kolom ke file." << std::endl;
+                tables_infile.close();
+                tables_outfile.close();
+                std::remove(tables_out_filename.c_str());
                 throw std::runtime_error("Gagal menulis nama kolom ke file");
             }
         }
@@ -676,10 +708,11 @@ bool StorageEngine::check_and_update_tables_metadata(const TableSchema& schema) 
 
         if (std::remove(tables_in_filename.c_str()) != 0) {
             std::perror("SM: Error deleting data file when deleting old tables.meta");
+            std::remove(tables_out_filename.c_str());
             throw std::runtime_error("SM: Error deleting data file when deleting old tables.meta");
         }
         std::rename(tables_out_filename.c_str(), tables_in_filename.c_str());
-        return result;
+        return true;
     }
 }
 
@@ -890,14 +923,29 @@ std::map<std::string, Statistic> StorageEngine::get_stats() {
 
 std::vector<TableSchema> StorageEngine::get_tables() {
     std::string tables_filename = data_dir_ + "/tables.meta";
-    std::ifstream tables_infile(tables_filename, std::ios::binary);
     std::vector<TableSchema> result;
     std::vector<std::string> tables;
+
+    if (!std::filesystem::exists(tables_filename)) {
+        return result;
+    }
+
+    std::ifstream tables_infile(tables_filename, std::ios::binary);
+    if (!tables_infile.is_open()) {
+        std::cerr << "SM: Gagal membuka file tables.meta" << std::endl;
+        return result;
+    }
+
+    if (tables_infile.peek() == EOF) {
+        tables_infile.close();
+        return result;
+    }
 
     uint16_t tables_len;
     tables_infile.read(reinterpret_cast<char*>(&tables_len), sizeof(tables_len));
     if (tables_infile.gcount() != sizeof(tables_len) || !tables_infile) {
         std::cerr << "SM: Error membaca panjang nama table pada file tables.meta" << std::endl;
+        tables_infile.close();
         throw std::runtime_error("File tables.meta korup dan gagal dibaca");
     }
 
@@ -920,7 +968,19 @@ std::vector<TableSchema> StorageEngine::get_tables() {
 
     // read table schema
     for (const std::string& table : tables) {
-        result.push_back(get_table_schema(table));
+        try {
+            // Check if schema file exists before trying to load it
+            std::string schema_filename = data_dir_ + "/" + table + ".schema";
+            if (!std::filesystem::exists(schema_filename)) {
+                std::cerr << "SM: Warning - Table '" << table << "' listed in tables.meta but schema file not found. Skipping." << std::endl;
+                continue;
+            }
+            result.push_back(get_table_schema(table));
+        } catch (const std::runtime_error& e) {
+            // If schema file exists but is corrupted, log error and skip
+            std::cerr << "SM: Warning - Failed to load schema for table '" << table << "': " << e.what() << ". Skipping." << std::endl;
+            continue;
+        }
     }
 
     tables_infile.close();

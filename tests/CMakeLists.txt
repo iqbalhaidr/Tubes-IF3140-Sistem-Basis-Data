@@ -29,3 +29,14 @@ target_link_libraries(test_failure_recovery
     sm_lib
 )
 target_include_directories(test_failure_recovery PRIVATE ${PROJECT_SOURCE_DIR}/include)
+
+add_executable(test_multithreaded_cc_fr test_multithreaded_cc_fr.cpp)
+target_link_libraries(test_multithreaded_cc_fr
+    PRIVATE
+    qp_lib
+    qo_lib
+    sm_lib
+    ccm_lib
+    fr_lib
+)
+target_include_directories(test_multithreaded_cc_fr PRIVATE ${PROJECT_SOURCE_DIR}/include)

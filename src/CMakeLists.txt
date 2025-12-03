@@ -43,3 +43,22 @@ target_link_libraries(test_query_processor
     ccm_lib
     fr_lib
 )
+
+# Server executable
+add_executable(server
+    ${CMAKE_SOURCE_DIR}/server.cpp
+)
+
+target_link_libraries(server
+    PRIVATE
+    qp_lib
+    qo_lib
+    sm_lib
+    ccm_lib
+    fr_lib
+)
+
+# Client executable
+add_executable(client
+    ${CMAKE_SOURCE_DIR}/client.cpp
+)
