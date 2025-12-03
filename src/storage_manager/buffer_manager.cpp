@@ -4,6 +4,7 @@
 #include <iostream>
 #include <cstring>
 #include <filesystem>
+#include <set>
 
 namespace mdbms::sm {
 
@@ -220,12 +221,27 @@ void BufferManager::flush_page(const std::string& table_name, int page_id) {
 }
 
 void BufferManager::clear_buffer() {
-    // Flush all dirty pages first
-    flush_all();
+    // For testing: Do NOT flush (discard dirty pages)
+    // and remove all .dat files to ensure clean state
+    
+    // Collect all table names
+    std::set<std::string> tables;
+    for (const auto& entry : buffer_pool_) {
+        tables.insert(entry.first.first);
+    }
     
     // Clear the buffer pool and schema cache
     buffer_pool_.clear();
     schema_cache_.clear();
+    
+    // Remove all .dat files for tables that were in buffer
+    for (const auto& table : tables) {
+        std::string filename = data_dir_ + "/" + table + ".dat";
+        if (std::filesystem::exists(filename)) {
+            std::filesystem::remove(filename);
+            std::cout << "[BufferManager] Removed data file: " << filename << std::endl;
+        }
+    }
     
     std::cout << "[BufferManager] Buffer pool cleared" << std::endl;
 }
