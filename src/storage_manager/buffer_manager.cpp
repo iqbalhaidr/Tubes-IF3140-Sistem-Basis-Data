@@ -315,6 +315,18 @@ void BufferManager::load_page_internal(const std::string& table_name, int page_i
     const uint8_t* end = ptr + bytes_read;
 
     while (ptr < end) {
+        // Check if we hit padding (all zeros) - stop reading
+        bool is_padding = true;
+        for (size_t i = 0; i < sizeof(int32_t) && ptr + i < end; i++) {
+            if (ptr[i] != 0) {
+                is_padding = false;
+                break;
+            }
+        }
+        if (is_padding) {
+            break; // Hit padding, no more valid rows
+        }
+        
         // Check if enough bytes for at least one field
         if (ptr + sizeof(int32_t) > end) break;
 
@@ -366,20 +378,47 @@ void BufferManager::flush_page_internal(BufferPage& page, const TableSchema& sch
     }
 
     // Write to disk
-    std::fstream file(filename, std::ios::binary | std::ios::in | std::ios::out);
+    int64_t page_offset = page_id_to_offset(page.page_id);
+    int64_t required_size = page_offset + PAGE_SIZE;
     
-    if (!file.is_open()) {
-        // File doesn't exist, create it
-        file.open(filename, std::ios::binary | std::ios::out);
-        if (!file.is_open()) {
+    // Ensure file exists and has enough size
+    if (!std::filesystem::exists(filename)) {
+        // Create new file with required size
+        std::ofstream create_file(filename, std::ios::binary);
+        if (!create_file.is_open()) {
             throw std::runtime_error("Failed to create file: " + filename);
         }
+        // Pre-allocate space by seeking and writing a byte at the end
+        create_file.seekp(required_size - 1, std::ios::beg);
+        create_file.put(0);
+        create_file.close();
+    } else {
+        // Check if file needs to be extended
+        auto current_size = std::filesystem::file_size(filename);
+        if (current_size < static_cast<uintmax_t>(required_size)) {
+            // Extend file size
+            std::ofstream extend_file(filename, std::ios::binary | std::ios::app);
+            if (!extend_file.is_open()) {
+                throw std::runtime_error("Failed to open file for extension: " + filename);
+            }
+            extend_file.seekp(required_size - 1, std::ios::beg);
+            extend_file.put(0);
+            extend_file.close();
+        }
     }
-
-    int64_t page_offset = page_id_to_offset(page.page_id);
-    file.seekp(page_offset, std::ios::beg);
-    file.write(reinterpret_cast<const char*>(buffer.data()), PAGE_SIZE);
     
+    // Now write the page data
+    std::fstream file(filename, std::ios::binary | std::ios::in | std::ios::out);
+    if (!file.is_open()) {
+        throw std::runtime_error("Failed to open file for writing: " + filename);
+    }
+    
+    file.seekp(page_offset, std::ios::beg);
+    if (!file.good()) {
+        throw std::runtime_error("Failed to seek to page offset: " + std::to_string(page_offset));
+    }
+    
+    file.write(reinterpret_cast<const char*>(buffer.data()), PAGE_SIZE);
     if (!file.good()) {
         throw std::runtime_error("Failed to write page to disk");
     }
