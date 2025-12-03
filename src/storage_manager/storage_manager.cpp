@@ -33,6 +33,14 @@ void StorageEngine::clear_buffer_for_testing() {
     buffer_manager_.clear_buffer();
 }
 
+void StorageEngine::checkpoint() {
+    buffer_manager_.checkpoint();
+}
+
+bool StorageEngine::is_buffer_near_full() const {
+    return buffer_manager_.is_near_full();
+}
+
 Rows<Row> StorageEngine::read_block(const DataRetrieval& retrieval) {
     Rows<Row> result;
     TableSchema schema;

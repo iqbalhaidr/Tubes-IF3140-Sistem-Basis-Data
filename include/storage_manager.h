@@ -47,6 +47,12 @@ public:
     // Get maximum page_id for a table (includes buffer + disk)
     int get_max_page_id(const std::string& table_name);
     
+    // Checkpoint: flush all dirty pages to disk
+    void checkpoint();
+    
+    // Check if buffer is near full (80% capacity)
+    bool is_near_full() const;
+    
     // Clear all buffer pool (for testing purposes)
     void clear_buffer();
 
@@ -122,6 +128,12 @@ public:
     std::vector<std::string> get_column_names(const std::string& table);
     bool drop_table(const std::string& table);
     static StorageEngine& get_instance();
+    
+    // Checkpoint: flush all dirty pages in buffer to disk
+    void checkpoint();
+    
+    // Check if buffer is near full
+    bool is_buffer_near_full() const;
     
     // For testing: clear buffer pool
     void clear_buffer_for_testing();

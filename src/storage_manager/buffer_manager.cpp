@@ -220,6 +220,33 @@ void BufferManager::flush_page(const std::string& table_name, int page_id) {
     }
 }
 
+void BufferManager::checkpoint() {
+    std::cout << "[BufferManager] Performing checkpoint..." << std::endl;
+    
+    int flushed_count = 0;
+    for (auto& entry : buffer_pool_) {
+        if (entry.second.is_dirty) {
+            try {
+                TableSchema schema = get_schema(entry.first.first);
+                flush_page_internal(entry.second, schema);
+                entry.second.is_dirty = false;
+                flushed_count++;
+            } catch (const std::exception& e) {
+                std::cerr << "[BufferManager] ERROR during checkpoint flush: " 
+                          << e.what() << std::endl;
+            }
+        }
+    }
+    
+    std::cout << "[BufferManager] Checkpoint complete. Flushed " 
+              << flushed_count << " dirty pages" << std::endl;
+}
+
+bool BufferManager::is_near_full() const {
+    size_t threshold = static_cast<size_t>(capacity_ * 0.8);
+    return buffer_pool_.size() >= threshold;
+}
+
 void BufferManager::clear_buffer() {
     // For testing: Do NOT flush (discard dirty pages)
     // and remove all .dat files to ensure clean state
