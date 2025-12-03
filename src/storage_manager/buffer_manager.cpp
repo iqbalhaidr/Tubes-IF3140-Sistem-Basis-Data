@@ -10,11 +10,11 @@ namespace mdbms::sm {
 
 BufferManager::BufferManager(const std::string& data_dir, size_t capacity)
     : data_dir_(data_dir), capacity_(capacity) {
-    std::cout << "[BufferManager] Initialized with capacity: " << capacity << std::endl;
+    std::cout << "BufferManager: Initialized with capacity: " << capacity << std::endl;
 }
 
 BufferManager::~BufferManager() {
-    std::cout << "[BufferManager] Flushing all dirty pages before shutdown..." << std::endl;
+    std::cout << "BufferManager: Flushing all dirty pages before shutdown..." << std::endl;
     flush_all();
 }
 
@@ -59,7 +59,7 @@ TableSchema BufferManager::get_schema(const std::string& table_name) {
 
     // Schema not in cache - this shouldn't happen in normal operation
     // Return empty schema as fallback
-    std::cerr << "[BufferManager] WARNING: Schema not found for table: " << table_name << std::endl;
+    std::cerr << "BufferManager: WARNING: Schema not found for table: " << table_name << std::endl;
     return TableSchema();
 }
 
@@ -71,13 +71,13 @@ BufferPage* BufferManager::get_page(const std::string& table_name, int page_id, 
     if (it != buffer_pool_.end()) {
         it->second.pin_count++;
         it->second.last_access_time = get_current_time();
-        std::cout << "[BufferManager] Page hit: " << table_name << " page " << page_id 
+        std::cout << "BufferManager: Page hit: " << table_name << " page " << page_id 
                   << " (pin_count=" << it->second.pin_count << ")" << std::endl;
         return &(it->second);
     }
 
     // Page not in buffer - need to load from disk
-    std::cout << "[BufferManager] Page miss: " << table_name << " page " << page_id << std::endl;
+    std::cout << "BufferManager: Page miss: " << table_name << " page " << page_id << std::endl;
 
     // Check if buffer is full
     if (buffer_pool_.size() >= capacity_) {
@@ -120,7 +120,7 @@ BufferPage* BufferManager::new_page(const std::string& table_name) {
 
     int new_page_id = max_page_id + 1;
     
-    std::cout << "[BufferManager] Creating new page: " << table_name 
+    std::cout << "BufferManager: Creating new page: " << table_name 
               << " page " << new_page_id << std::endl;
 
     // Check if buffer is full
@@ -153,7 +153,7 @@ void BufferManager::unpin_page(const std::string& table_name, int page_id, bool 
         if (mark_dirty) {
             it->second.is_dirty = true;
         }
-        std::cout << "[BufferManager] Unpinned: " << table_name << " page " << page_id 
+        std::cout << "BufferManager: Unpinned: " << table_name << " page " << page_id 
                   << " (pin_count=" << it->second.pin_count 
                   << ", dirty=" << it->second.is_dirty << ")" << std::endl;
     }
@@ -172,11 +172,11 @@ void BufferManager::evict_page() {
     }
 
     if (victim == buffer_pool_.end()) {
-        std::cerr << "[BufferManager] ERROR: All pages are pinned! Cannot evict." << std::endl;
+        std::cerr << "BufferManager: ERROR: All pages are pinned! Cannot evict." << std::endl;
         throw std::runtime_error("Buffer pool full and all pages pinned");
     }
 
-    std::cout << "[BufferManager] Evicting page: " << victim->first.first 
+    std::cout << "BufferManager: Evicting page: " << victim->first.first 
               << " page " << victim->first.second 
               << " (dirty=" << victim->second.is_dirty << ")" << std::endl;
 
@@ -186,7 +186,7 @@ void BufferManager::evict_page() {
             TableSchema schema = get_schema(victim->first.first);
             flush_page_internal(victim->second, schema);
         } catch (const std::exception& e) {
-            std::cerr << "[BufferManager] ERROR flushing page during eviction: " << e.what() << std::endl;
+            std::cerr << "BufferManager: ERROR flushing page during eviction: " << e.what() << std::endl;
         }
     }
 
@@ -202,7 +202,7 @@ void BufferManager::flush_all() {
                 flush_page_internal(entry.second, schema);
                 entry.second.is_dirty = false;
             } catch (const std::exception& e) {
-                std::cerr << "[BufferManager] ERROR flushing page " << entry.first.first 
+                std::cerr << "BufferManager: ERROR flushing page " << entry.first.first 
                           << " page " << entry.first.second << ": " << e.what() << std::endl;
             }
         }
@@ -221,7 +221,7 @@ void BufferManager::flush_page(const std::string& table_name, int page_id) {
 }
 
 void BufferManager::checkpoint() {
-    std::cout << "[BufferManager] Performing checkpoint..." << std::endl;
+    std::cout << "BufferManager: Performing checkpoint..." << std::endl;
     
     int flushed_count = 0;
     for (auto& entry : buffer_pool_) {
@@ -232,13 +232,13 @@ void BufferManager::checkpoint() {
                 entry.second.is_dirty = false;
                 flushed_count++;
             } catch (const std::exception& e) {
-                std::cerr << "[BufferManager] ERROR during checkpoint flush: " 
+                std::cerr << "BufferManager: ERROR during checkpoint flush: " 
                           << e.what() << std::endl;
             }
         }
     }
     
-    std::cout << "[BufferManager] Checkpoint complete. Flushed " 
+    std::cout << "BufferManager: Checkpoint complete. Flushed " 
               << flushed_count << " dirty pages" << std::endl;
 }
 
@@ -266,11 +266,11 @@ void BufferManager::clear_buffer() {
         std::string filename = data_dir_ + "/" + table + ".dat";
         if (std::filesystem::exists(filename)) {
             std::filesystem::remove(filename);
-            std::cout << "[BufferManager] Removed data file: " << filename << std::endl;
+            std::cout << "BufferManager: Removed data file: " << filename << std::endl;
         }
     }
     
-    std::cout << "[BufferManager] Buffer pool cleared" << std::endl;
+    std::cout << "BufferManager: Buffer pool cleared" << std::endl;
 }
 
 void BufferManager::load_page_internal(const std::string& table_name, int page_id, 
@@ -279,13 +279,13 @@ void BufferManager::load_page_internal(const std::string& table_name, int page_i
     
     // Check if file exists
     if (!std::filesystem::exists(filename)) {
-        std::cout << "[BufferManager] File doesn't exist, returning empty page: " << filename << std::endl;
+        std::cout << "BufferManager: File doesn't exist, returning empty page: " << filename << std::endl;
         return;
     }
 
     std::ifstream file(filename, std::ios::binary);
     if (!file.is_open()) {
-        std::cerr << "[BufferManager] Failed to open file: " << filename << std::endl;
+        std::cerr << "BufferManager: Failed to open file: " << filename << std::endl;
         return;
     }
 
@@ -294,7 +294,7 @@ void BufferManager::load_page_internal(const std::string& table_name, int page_i
     file.seekg(page_offset, std::ios::beg);
     
     if (!file.good()) {
-        std::cout << "[BufferManager] Page beyond file size, returning empty page" << std::endl;
+        std::cout << "BufferManager: Page beyond file size, returning empty page" << std::endl;
         file.close();
         return;
     }
@@ -306,7 +306,7 @@ void BufferManager::load_page_internal(const std::string& table_name, int page_i
     file.close();
 
     if (bytes_read == 0) {
-        std::cout << "[BufferManager] No data in page" << std::endl;
+        std::cout << "BufferManager: No data in page" << std::endl;
         return;
     }
 
@@ -325,13 +325,13 @@ void BufferManager::load_page_internal(const std::string& table_name, int page_i
         page.rows.push_back(row);
     }
 
-    std::cout << "[BufferManager] Loaded " << page.rows.size() << " rows from page " << page_id << std::endl;
+    std::cout << "BufferManager: Loaded " << page.rows.size() << " rows from page " << page_id << std::endl;
 }
 
 void BufferManager::flush_page_internal(BufferPage& page, const TableSchema& schema_param) {
     std::string filename = data_dir_ + "/" + page.table_name + ".dat";
     
-    std::cout << "[BufferManager] Flushing page: " << page.table_name 
+    std::cout << "BufferManager: Flushing page: " << page.table_name 
               << " page " << page.page_id << " (" << page.rows.size() << " rows)" << std::endl;
 
     // Load schema if not provided
@@ -340,12 +340,12 @@ void BufferManager::flush_page_internal(BufferPage& page, const TableSchema& sch
         // Load schema from file
         std::string schema_file = data_dir_ + "/" + page.table_name + ".schema";
         if (!std::filesystem::exists(schema_file)) {
-            std::cerr << "[BufferManager] WARNING: Schema file not found, skipping flush" << std::endl;
+            std::cerr << "BufferManager: WARNING: Schema file not found, skipping flush" << std::endl;
             return;
         }
         // For now, we'll skip flushing if schema is not provided
         // In production, you'd implement schema loading here
-        std::cerr << "[BufferManager] WARNING: Schema not provided for flush, skipping" << std::endl;
+        std::cerr << "BufferManager: WARNING: Schema not provided for flush, skipping" << std::endl;
         return;
     }
 
@@ -361,7 +361,7 @@ void BufferManager::flush_page_internal(BufferPage& page, const TableSchema& sch
     if (buffer.size() < PAGE_SIZE) {
         buffer.resize(PAGE_SIZE, 0);
     } else if (buffer.size() > PAGE_SIZE) {
-        std::cerr << "[BufferManager] WARNING: Page size exceeded!" << std::endl;
+        std::cerr << "BufferManager: WARNING: Page size exceeded!" << std::endl;
         buffer.resize(PAGE_SIZE); // Truncate
     }
 
