@@ -409,6 +409,94 @@ Row FailureRecoveryManager::read_row(std::ifstream& in) {
     return row;
 }
 
+void FailureRecoveryManager::write_schema(std::ofstream& out, const TableSchema& schema) {
+    // 1. Table Name
+    write_string(out, schema.table_name);
+
+    // 2. Column Names
+    uint32_t col_count = static_cast<uint32_t>(schema.column_names.size());
+    out.write(reinterpret_cast<const char*>(&col_count), sizeof(col_count));
+    for (const auto& name : schema.column_names) {
+        write_string(out, name);
+    }
+
+    // 3. Column Types
+    // Ensure types size matches names size for consistency, though schema struct implies they should match
+    uint32_t type_count = static_cast<uint32_t>(schema.column_types.size());
+    out.write(reinterpret_cast<const char*>(&type_count), sizeof(type_count));
+    for (const auto& type : schema.column_types) {
+        int type_int = static_cast<int>(type);
+        out.write(reinterpret_cast<const char*>(&type_int), sizeof(type_int));
+    }
+
+    // 4. Column Sizes
+    uint32_t size_count = static_cast<uint32_t>(schema.column_sizes.size());
+    out.write(reinterpret_cast<const char*>(&size_count), sizeof(size_count));
+    for (int size : schema.column_sizes) {
+        out.write(reinterpret_cast<const char*>(&size), sizeof(size));
+    }
+
+    // 5. Primary Key
+    write_string(out, schema.primary_key);
+
+    // 6. Foreign Keys
+    uint32_t fk_count = static_cast<uint32_t>(schema.foreign_keys.size());
+    out.write(reinterpret_cast<const char*>(&fk_count), sizeof(fk_count));
+    for (const auto& [col, ref] : schema.foreign_keys) {
+        write_string(out, col);
+        write_string(out, ref);
+    }
+}
+
+TableSchema FailureRecoveryManager::read_schema(std::ifstream& in) {
+    TableSchema schema;
+
+    // 1. Table Name
+    schema.table_name = read_string(in);
+
+    // 2. Column Names
+    uint32_t col_count;
+    in.read(reinterpret_cast<char*>(&col_count), sizeof(col_count));
+    schema.column_names.resize(col_count);
+    for (uint32_t i = 0; i < col_count; ++i) {
+        schema.column_names[i] = read_string(in);
+    }
+
+    // 3. Column Types
+    uint32_t type_count;
+    in.read(reinterpret_cast<char*>(&type_count), sizeof(type_count));
+    schema.column_types.resize(type_count);
+    for (uint32_t i = 0; i < type_count; ++i) {
+        int type_int;
+        in.read(reinterpret_cast<char*>(&type_int), sizeof(type_int));
+        schema.column_types[i] = static_cast<DataType>(type_int);
+    }
+
+    // 4. Column Sizes
+    uint32_t size_count;
+    in.read(reinterpret_cast<char*>(&size_count), sizeof(size_count));
+    schema.column_sizes.resize(size_count);
+    for (uint32_t i = 0; i < size_count; ++i) {
+        int size;
+        in.read(reinterpret_cast<char*>(&size), sizeof(size));
+        schema.column_sizes[i] = size;
+    }
+
+    // 5. Primary Key
+    schema.primary_key = read_string(in);
+
+    // 6. Foreign Keys
+    uint32_t fk_count;
+    in.read(reinterpret_cast<char*>(&fk_count), sizeof(fk_count));
+    for (uint32_t i = 0; i < fk_count; ++i) {
+        std::string col = read_string(in);
+        std::string ref = read_string(in);
+        schema.foreign_keys[col] = ref;
+    }
+
+    return schema;
+}
+
 void FailureRecoveryManager::write_log_to_file(std::ofstream& out, const LogEntry& entry) {
     out.write(reinterpret_cast<const char*>(&entry.log_id), sizeof(entry.log_id));
     out.write(reinterpret_cast<const char*>(&entry.transaction_id), sizeof(entry.transaction_id));
@@ -438,11 +526,21 @@ void FailureRecoveryManager::write_log_to_file(std::ofstream& out, const LogEntr
     } else if (entry.operation == Operation::CREATE_TABLE) {
         write_string(out, entry.table_name);
         write_string(out, entry.query);
-        // TODO: Serialize created_schema for REDO
+        
+        bool has_schema = entry.created_schema.has_value();
+        out.write(reinterpret_cast<const char*>(&has_schema), sizeof(has_schema));
+        if (has_schema) {
+            write_schema(out, entry.created_schema.value());
+        }
     } else if (entry.operation == Operation::DROP_TABLE) {
         write_string(out, entry.table_name);
         write_string(out, entry.query);
-        // TODO: Serialize dropped_schema for UNDO
+        
+        bool has_schema = entry.dropped_schema.has_value();
+        out.write(reinterpret_cast<const char*>(&has_schema), sizeof(has_schema));
+        if (has_schema) {
+            write_schema(out, entry.dropped_schema.value());
+        }
     }
 }
 
@@ -479,11 +577,20 @@ LogEntry FailureRecoveryManager::read_log_from_file(std::ifstream& in) {
         entry.table_name = read_string(in);
         entry.query = read_string(in);
 
-        // TODO: Deserialize created_schema
+        bool has_schema;
+        in.read(reinterpret_cast<char*>(&has_schema), sizeof(has_schema));
+        if (has_schema) {
+            entry.created_schema = read_schema(in);
+        }
     } else if (entry.operation == Operation::DROP_TABLE) {
         entry.table_name = read_string(in);
         entry.query = read_string(in);
-        // TODO: Deserialize dropped_schema
+        
+        bool has_schema;
+        in.read(reinterpret_cast<char*>(&has_schema), sizeof(has_schema));
+        if (has_schema) {
+            entry.dropped_schema = read_schema(in);
+        }
     }
 
     return entry;
@@ -550,6 +657,45 @@ std::string FailureRecoveryManager::row_to_string(const Row& row) {
     return oss.str();
 }
 
+std::string FailureRecoveryManager::schema_to_string(const TableSchema& schema) {
+    std::ostringstream oss;
+    oss << "{Table:" << schema.table_name << ", PK:" << schema.primary_key << ", Cols:[";
+    
+    for (size_t i = 0; i < schema.column_names.size(); ++i) {
+        if (i > 0) oss << "; ";
+        oss << schema.column_names[i] << "(";
+        
+        if (i < schema.column_types.size()) {
+            switch (schema.column_types[i]) {
+                case DataType::INTEGER: oss << "INT"; break;
+                case DataType::FLOAT: oss << "FLOAT"; break;
+                case DataType::CHAR: oss << "CHAR"; break;
+                case DataType::VARCHAR: oss << "VARCHAR"; break;
+                default: oss << "UNK"; break;
+            }
+        }
+        
+        if (i < schema.column_sizes.size() && schema.column_sizes[i] > 0) {
+             oss << ":" << schema.column_sizes[i];
+        }
+        oss << ")";
+    }
+    oss << "]";
+
+    if (!schema.foreign_keys.empty()) {
+        oss << ", FKs:[";
+        bool first = true;
+        for (const auto& [col, ref] : schema.foreign_keys) {
+            if (!first) oss << "; ";
+            oss << col << "->" << ref;
+            first = false;
+        }
+        oss << "]";
+    }
+    oss << "}";
+    return oss.str();
+}
+
 std::string FailureRecoveryManager::sanitize_for_log(std::string input) {
     // Ganti newline dengan spasi agar tetap 1 baris
     std::replace(input.begin(), input.end(), '\n', ' ');
@@ -591,6 +737,20 @@ void FailureRecoveryManager::write_log_to_text_file(std::ofstream& out, const Lo
     else if (entry.operation == Operation::CHECKPOINT) {
         // Query di checkpoint berisi list active transactions
         out << " | Info:" << sanitize_for_log(entry.query); 
+    }
+    else if (entry.operation == Operation::CREATE_TABLE) {
+        if (entry.created_schema.has_value()) {
+            out << " | Schema:" << schema_to_string(entry.created_schema.value());
+        } else {
+            out << " | Schema:NULL";
+        }
+    }
+    else if (entry.operation == Operation::DROP_TABLE) {
+        if (entry.dropped_schema.has_value()) {
+            out << " | BackupSchema:" << schema_to_string(entry.dropped_schema.value());
+        } else {
+            out << " | BackupSchema:NULL";
+        }
     }
 
     // 4. Tulis Query (Kecuali Checkpoint yang sudah ditulis di atas)
@@ -1000,7 +1160,7 @@ void FailureRecoveryManager::recover_from_crash() {
                          entry.operation == Operation::DELETE ||
                          entry.operation == Operation::CREATE_TABLE ||
                          entry.operation == Operation::DROP_TABLE) {
-ut << "FRM: UNDO T" << entry.transaction_id << " - " 
+                    std::cout << "FRM: UNDO T" << entry.transaction_id << " - " 
                               << operation_to_string(entry.operation) 
                               << " pada tabel " << entry.table_name 
                               << " (log_id: " << entry.log_id << ")" << std::endl;

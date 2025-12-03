@@ -855,6 +855,105 @@ void test_system_crash_recovery() {
     std::cout << GREEN << "PASS: System Crash Recovery with REDO phase successful!" << RESET << std::endl;
 }
 
+void test_log_entry_schema_serialization() {
+    std::cout << "\n[TEST] Log Entry Schema Serialization..." << std::endl;
+    
+    std::string test_file_bin = "../data/test_schema_wal.bin";
+    std::string test_file_txt = "../data/test_schema_wal.txt";
+
+    if (fs::exists(test_file_bin)) fs::remove(test_file_bin);
+    if (fs::exists(test_file_txt)) fs::remove(test_file_txt);
+
+    // 1. Setup Mockup LogEntry with Created Schema
+    mdbms::LogEntry create_entry;
+    create_entry.log_id = 100;
+    create_entry.transaction_id = 50;
+    create_entry.timestamp = std::time(nullptr);
+    create_entry.operation = mdbms::Operation::CREATE_TABLE;
+    create_entry.table_name = "students";
+    create_entry.query = "CREATE TABLE students ...";
+
+    mdbms::TableSchema created_schema;
+    created_schema.table_name = "students";
+    created_schema.column_names = {"id", "name", "gpa"};
+    created_schema.column_types = {mdbms::DataType::INTEGER, mdbms::DataType::VARCHAR, mdbms::DataType::FLOAT};
+    created_schema.column_sizes = {4, 255, 4};
+    created_schema.primary_key = "id";
+    created_schema.foreign_keys["advisor_id"] = "professors.id";
+    create_entry.created_schema = created_schema;
+
+    // 2. Setup Mockup LogEntry with Dropped Schema
+    mdbms::LogEntry drop_entry;
+    drop_entry.log_id = 101;
+    drop_entry.transaction_id = 51;
+    drop_entry.timestamp = std::time(nullptr);
+    drop_entry.operation = mdbms::Operation::DROP_TABLE;
+    drop_entry.table_name = "courses";
+    drop_entry.query = "DROP TABLE courses";
+
+    mdbms::TableSchema dropped_schema;
+    dropped_schema.table_name = "courses";
+    dropped_schema.column_names = {"code", "title"};
+    dropped_schema.column_types = {mdbms::DataType::VARCHAR, mdbms::DataType::VARCHAR};
+    dropped_schema.column_sizes = {10, 100};
+    dropped_schema.primary_key = "code";
+    drop_entry.dropped_schema = dropped_schema;
+
+    // 3. Write to file
+    {
+        std::ofstream out_bin(test_file_bin, std::ios::binary);
+        std::ofstream out_txt(test_file_txt);
+
+        fr::FailureRecoveryManager::get_instance().write_log_to_file(out_bin, create_entry);
+        fr::FailureRecoveryManager::get_instance().write_log_to_text_file(out_txt, create_entry);
+
+        fr::FailureRecoveryManager::get_instance().write_log_to_file(out_bin, drop_entry);
+        fr::FailureRecoveryManager::get_instance().write_log_to_text_file(out_txt, drop_entry);
+
+        out_bin.close();
+        out_txt.close();
+    }
+
+    // 4. Read from file
+    std::ifstream in(test_file_bin, std::ios::binary);
+    mdbms::LogEntry read_create_entry = fr::FailureRecoveryManager::get_instance().read_log_from_file(in);
+    mdbms::LogEntry read_drop_entry = fr::FailureRecoveryManager::get_instance().read_log_from_file(in);
+    in.close();
+
+    // 5. Verify Create Entry
+    assert(read_create_entry.log_id == create_entry.log_id);
+    assert(read_create_entry.transaction_id == create_entry.transaction_id);
+    assert(read_create_entry.operation == mdbms::Operation::CREATE_TABLE);
+    assert(read_create_entry.table_name == "students");
+    assert(read_create_entry.created_schema.has_value());
+    
+    const auto& rs1 = read_create_entry.created_schema.value();
+    assert(rs1.table_name == "students");
+    assert(rs1.column_names.size() == 3);
+    assert(rs1.column_names[0] == "id");
+    assert(rs1.column_names[1] == "name");
+    assert(rs1.column_types[0] == mdbms::DataType::INTEGER);
+    assert(rs1.column_types[1] == mdbms::DataType::VARCHAR);
+    assert(rs1.column_sizes[1] == 255);
+    assert(rs1.primary_key == "id");
+    assert(rs1.foreign_keys.count("advisor_id"));
+    assert(rs1.foreign_keys.at("advisor_id") == "professors.id");
+
+    // 6. Verify Drop Entry
+    assert(read_drop_entry.log_id == drop_entry.log_id);
+    assert(read_drop_entry.operation == mdbms::Operation::DROP_TABLE);
+    assert(read_drop_entry.table_name == "courses");
+    assert(read_drop_entry.dropped_schema.has_value());
+
+    const auto& rs2 = read_drop_entry.dropped_schema.value();
+    assert(rs2.table_name == "courses");
+    assert(rs2.column_names.size() == 2);
+    assert(rs2.primary_key == "code");
+
+    std::cout << GREEN << "PASS: Log Entry Schema Serialization Test" << RESET << std::endl;
+    std::cout << "      Saved to " << test_file_bin << " and " << test_file_txt << std::endl;
+}
+
 int main() {
     clean_environment();
 
@@ -864,6 +963,7 @@ int main() {
     test_write_log_persistence();
     test_checkpoint_logic();
     test_write_log_for_control_queries();
+    test_log_entry_schema_serialization();
     
     // === RECOVERY TESTS (UNDO) ===
     std::cout << "\n" << "=== RECOVERY (UNDO) TESTS ===" << std::endl;
