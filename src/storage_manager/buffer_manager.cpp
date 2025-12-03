@@ -219,6 +219,17 @@ void BufferManager::flush_page(const std::string& table_name, int page_id) {
     }
 }
 
+void BufferManager::clear_buffer() {
+    // Flush all dirty pages first
+    flush_all();
+    
+    // Clear the buffer pool and schema cache
+    buffer_pool_.clear();
+    schema_cache_.clear();
+    
+    std::cout << "[BufferManager] Buffer pool cleared" << std::endl;
+}
+
 void BufferManager::load_page_internal(const std::string& table_name, int page_id, 
                                        BufferPage& page, const TableSchema& schema) {
     std::string filename = data_dir_ + "/" + table_name + ".dat";

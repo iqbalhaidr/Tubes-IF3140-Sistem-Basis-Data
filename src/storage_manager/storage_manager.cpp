@@ -29,6 +29,10 @@ StorageEngine::~StorageEngine() {
     buffer_manager_.flush_all();
 }
 
+void StorageEngine::clear_buffer_for_testing() {
+    buffer_manager_.clear_buffer();
+}
+
 Rows<Row> StorageEngine::read_block(const DataRetrieval& retrieval) {
     Rows<Row> result;
     TableSchema schema;
