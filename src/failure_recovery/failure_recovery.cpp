@@ -159,6 +159,10 @@ void FailureRecoveryManager::save_checkpoint() {
     std::cout << "FRM: Menyimpan checkpoint..." << std::endl;
     std::lock_guard<std::mutex> lock(this->mtx);
     flush_buffer();
+    
+    // Flush all dirty pages from buffer to disk BEFORE writing checkpoint log
+    std::cout << "FRM: Triggering Storage Manager checkpoint (flush dirty pages)..." << std::endl;
+    storage_engine_.checkpoint();
 
     // Menambahkan entri log untuk checkpoint
     LogEntry checkpoint_entry;
