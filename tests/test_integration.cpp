@@ -32,13 +32,50 @@ public:
     std::unique_ptr<mdbms::qp::QueryProcessor> qp;
 
     IntegrationTestSetup(const std::string& dir) : test_dir(dir) {
+        // Clean up any existing data from previous tests
+        cleanup_data_directory();
+        
         std::filesystem::create_directory(test_dir);
         // All components are singletons, QueryProcessor uses get_instance() for all
         qp = std::make_unique<mdbms::qp::QueryProcessor>();
+        
+        // Create Student table schema
+        create_student_table();
     }
 
     ~IntegrationTestSetup() {
         std::filesystem::remove_all(test_dir);
+        // Also cleanup singleton's data directory
+        cleanup_data_directory();
+    }
+    
+    void cleanup_data_directory() {
+        // Clear the buffer pool first (flushes dirty pages)
+        auto& storage = mdbms::sm::StorageEngine::get_instance();
+        storage.clear_buffer_for_testing();
+        
+        // Remove all data files
+        std::string data_dir = "data";
+        if (std::filesystem::exists(data_dir)) {
+            // Remove all .dat and .schema files
+            for (const auto& entry : std::filesystem::directory_iterator(data_dir)) {
+                if (entry.is_regular_file()) {
+                    std::filesystem::remove(entry.path());
+                }
+            }
+        }
+    }
+    
+    void create_student_table() {
+        mdbms::TableSchema student_schema;
+        student_schema.table_name = "Student";
+        student_schema.column_names = {"StudentID", "FullName", "GPA"};
+        student_schema.column_types = {mdbms::DataType::INTEGER, mdbms::DataType::VARCHAR, mdbms::DataType::FLOAT};
+        student_schema.column_sizes = {0, 100, 0};
+        student_schema.primary_key = "StudentID";
+        student_schema.foreign_keys = {};
+        
+        mdbms::sm::StorageEngine::get_instance().create_table(student_schema);
     }
 
     void insert_student_direct(int id, const std::string& name, float gpa) {
@@ -53,13 +90,18 @@ public:
 bool test_basic_integration() {
     std::cout << "\n=== TEST 1: Basic Integration (QP + QO + SM + CCM + FRM) ===" << std::endl;
 
-    // All components are singletons, QueryProcessor uses get_instance() for all
-    mdbms::qp::QueryProcessor qp;
+    // Setup test environment (creates Student table)
+    IntegrationTestSetup setup("test1_tmp");
+    
+    // Insert test data
+    setup.insert_student_direct(1, "Alice", 3.8f);
+    setup.insert_student_direct(2, "Bob", 3.5f);
+    setup.insert_student_direct(3, "Charlie", 3.9f);
 
     const std::string query = "SELECT * FROM Student";
     std::ostringstream captured_output;
     auto* original_buf = std::cout.rdbuf(captured_output.rdbuf());
-    const auto result = qp.execute_query(query);
+    const auto result = setup.qp->execute_query(query);
     std::cout.rdbuf(original_buf);
 
     bool passed = true;
