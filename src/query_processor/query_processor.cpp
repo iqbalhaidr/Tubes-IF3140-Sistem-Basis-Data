@@ -967,6 +967,7 @@ bool QueryProcessor::execute_create_table(const mdbms::qo::ParsedQuery& parsed_q
                 } else {
                     log_result.query = "CREATE TABLE " + table_name;
                 }
+                log_result.table_name = table_name;
                 log_result.success = true;
                 log_result.affected_rows = 0;
                 frm_manager->write_log(log_result);
@@ -1014,6 +1015,7 @@ bool QueryProcessor::execute_drop_table(const mdbms::qo::ParsedQuery& parsed_que
                 } else {
                     log_result.query = "DROP TABLE " + table_name;
                 }
+                log_result.table_name = table_name;
                 log_result.success = true;
                 log_result.affected_rows = 0;
                 frm_manager->write_log(log_result);

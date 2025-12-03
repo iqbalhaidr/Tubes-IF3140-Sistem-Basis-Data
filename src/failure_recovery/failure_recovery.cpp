@@ -1,7 +1,6 @@
 #include <iostream>
 #include <fstream>
 #include <algorithm>
-#include <vector>
 #include <cctype>
 #include <sstream>
 #include <filesystem>
@@ -42,6 +41,12 @@ Operation determine_operation_type(const std::string& query) {
     // SELECT yang berhasil di-log sebagai COMMIT non-data
     if (first_word == "SELECT") {
         return Operation::COMMIT;
+    }
+    if (first_word == "CREATE") {
+        return Operation::CREATE_TABLE;
+    }
+    if (first_word == "DROP") {
+        return Operation::DROP_TABLE;
     }
 
     return Operation::BEGIN;
@@ -129,6 +134,30 @@ void FailureRecoveryManager::write_log(const ExecutionResult& info) {
     } else if (entry.operation == Operation::COMMIT || entry.operation == Operation::ABORT) {
         this->active_transactions_cache.erase(entry.transaction_id);
         std::cout << "FRM: Transaksi " << entry.transaction_id << " selesai." << std::endl;
+    } else if (entry.operation == Operation::CREATE_TABLE) {
+        entry.table_name = info.table_name;
+        try {
+            TableSchema schema = storage_engine_.get_table_schema(entry.table_name);
+            entry.created_schema = schema;
+            std::cout << "FRM: Logging CREATE TABLE untuk table " 
+                      << entry.table_name << " (schema saved for recovery)" << std::endl;
+        } catch (const std::exception& e) {
+            std::cerr << "FRM Warning: Gagal mendapatkan schema untuk tabel yang dibuat: " 
+                      << entry.table_name << ". Error: " << e.what() << std::endl;
+            entry.created_schema = std::nullopt;
+        }
+    } else if (entry.operation == Operation::DROP_TABLE) {
+        entry.table_name = info.table_name;
+        try {
+            TableSchema schema = storage_engine_.get_table_schema(entry.table_name);
+            entry.dropped_schema = schema;
+            std::cout << "FRM: Logging DROP TABLE untuk table " 
+                      << entry.table_name << " (schema saved for recovery)" << std::endl;
+        } catch (const std::exception& e) {
+            std::cerr << "FRM Warning: Gagal mendapatkan schema untuk tabel yang di-drop: " 
+                      << entry.table_name << ". Error: " << e.what() << std::endl;
+            entry.dropped_schema = std::nullopt;
+        }
     } else {
         // SELECT (Commit non-data): kosongkan field data
         entry.table_name.clear();
@@ -268,6 +297,8 @@ std::string FailureRecoveryManager::operation_to_string(Operation op) {
         case Operation::INSERT: return "INSERT";
         case Operation::DELETE: return "DELETE";
         case Operation::CHECKPOINT: return "CHECKPOINT";
+        case Operation::CREATE_TABLE: return "CREATE_TABLE";
+        case Operation::DROP_TABLE: return "DROP_TABLE";
         default: return "UNKNOWN";
     }
 }
@@ -404,6 +435,14 @@ void FailureRecoveryManager::write_log_to_file(std::ofstream& out, const LogEntr
     } else if (entry.operation == Operation::CHECKPOINT) {
         write_string(out, entry.table_name);
         write_string(out, entry.query);
+    } else if (entry.operation == Operation::CREATE_TABLE) {
+        write_string(out, entry.table_name);
+        write_string(out, entry.query);
+        // TODO: Serialize created_schema for REDO
+    } else if (entry.operation == Operation::DROP_TABLE) {
+        write_string(out, entry.table_name);
+        write_string(out, entry.query);
+        // TODO: Serialize dropped_schema for UNDO
     }
 }
 
@@ -436,6 +475,15 @@ LogEntry FailureRecoveryManager::read_log_from_file(std::ifstream& in) {
     } else if (entry.operation == Operation::CHECKPOINT) {
         entry.table_name = read_string(in);
         entry.query = read_string(in);
+    } else if (entry.operation == Operation::CREATE_TABLE) {
+        entry.table_name = read_string(in);
+        entry.query = read_string(in);
+
+        // TODO: Deserialize created_schema
+    } else if (entry.operation == Operation::DROP_TABLE) {
+        entry.table_name = read_string(in);
+        entry.query = read_string(in);
+        // TODO: Deserialize dropped_schema
     }
 
     return entry;
@@ -701,6 +749,36 @@ bool FailureRecoveryManager::undo_operation(const LogEntry& entry) {
                 
                 return updated > 0;
             }
+
+            case Operation::CREATE_TABLE: {
+                std::cout << "FRM: UNDO CREATE_TABLE - Menghapus tabel " << entry.table_name << std::endl;
+                
+                bool dropped = storage_engine_.drop_table(entry.table_name);
+                if (dropped) {
+                    std::cout << "FRM: Tabel " << entry.table_name << " berhasil dihapus." << std::endl;
+                } else {
+                    std::cerr << "FRM Error: Gagal menghapus tabel " << entry.table_name << std::endl;
+                }
+                return dropped;
+            }
+
+            case Operation::DROP_TABLE: {
+                std::cout << "FRM: UNDO DROP_TABLE - Mengembalikan tabel " << entry.table_name << std::endl;
+                
+                if (!entry.dropped_schema.has_value()) {
+                    std::cerr << "FRM Error: Skema untuk tabel " << entry.table_name << " tidak tersedia, tidak dapat mengembalikan tabel." << std::endl;
+                    return false;
+                }
+
+                const TableSchema& schema = entry.dropped_schema.value();
+                bool created = storage_engine_.create_table(schema);
+                if (created) {
+                    std::cout << "FRM: Tabel " << entry.table_name << " berhasil dikembalikan." << std::endl;
+                } else {
+                    std::cerr << "FRM Error: Gagal mengembalikan tabel " << entry.table_name << std::endl;
+                }
+                return created;
+            }
             
             default:
                 std::cerr << "FRM Error: Operasi " << operation_to_string(entry.operation) 
@@ -768,6 +846,44 @@ bool FailureRecoveryManager::redo_operation(const LogEntry& entry) {
                 storage_engine_.write_block(write);
                 return true;
             }
+
+            case Operation::CREATE_TABLE: {
+                std::cout << "FRM: REDO CREATE_TABLE - Membuat tabel " << entry.table_name << std::endl;
+
+                if (!entry.created_schema.has_value()) {
+                    std::cerr << "FRM Error: Schema untuk tabel " << entry.table_name 
+                            << " tidak tersedia untuk REDO CREATE." << std::endl;
+                    
+                    std::cout << "FRM: Melewati REDO CREATE (schema tidak tersimpan, "
+                            << "table mungkin sudah ada)" << std::endl;
+                    return true;
+                }
+
+                const TableSchema& schema = entry.created_schema.value();
+                bool created = storage_engine_.create_table(schema);
+                
+                if (created) {
+                    std::cout << "FRM: Tabel " << entry.table_name << " berhasil dibuat." << std::endl;
+                } else {
+                    std::cout << "FRM: Tabel " << entry.table_name 
+                            << " mungkin sudah ada, melewati REDO CREATE." << std::endl;
+                }
+                
+                return true;
+            }
+
+            case Operation::DROP_TABLE: {
+                std::cout << "FRM: REDO DROP_TABLE - Menghapus tabel " << entry.table_name << std::endl;
+
+                bool dropped = storage_engine_.drop_table(entry.table_name);
+                if (dropped) {
+                    std::cout << "FRM: Tabel " << entry.table_name << " berhasil dihapus." << std::endl;
+                } else {
+                    std::cerr << "FRM Error: Gagal menghapus tabel " << entry.table_name << std::endl;
+                }
+                return dropped;
+            }
+
             default:
                 std::cerr << "FRM Error: Operasi " << operation_to_string(entry.operation) 
                           << " tidak dapat di-REDO" << std::endl;
@@ -845,7 +961,9 @@ void FailureRecoveryManager::recover_from_crash() {
             if (committed_txs.count(entry.transaction_id) && 
                 (entry.operation == Operation::INSERT || 
                  entry.operation == Operation::UPDATE || 
-                 entry.operation == Operation::DELETE)) {
+                 entry.operation == Operation::DELETE || 
+                 entry.operation == Operation::CREATE_TABLE ||
+                 entry.operation == Operation::DROP_TABLE)) {
                 
                 std::cout << "FRM: REDO T" << entry.transaction_id << " - " 
                           << operation_to_string(entry.operation) 
@@ -879,9 +997,10 @@ void FailureRecoveryManager::recover_from_crash() {
                 } 
                 else if (entry.operation == Operation::INSERT || 
                          entry.operation == Operation::UPDATE || 
-                         entry.operation == Operation::DELETE) {
-                    
-                    std::cout << "FRM: UNDO T" << entry.transaction_id << " - " 
+                         entry.operation == Operation::DELETE ||
+                         entry.operation == Operation::CREATE_TABLE ||
+                         entry.operation == Operation::DROP_TABLE) {
+ut << "FRM: UNDO T" << entry.transaction_id << " - " 
                               << operation_to_string(entry.operation) 
                               << " pada tabel " << entry.table_name 
                               << " (log_id: " << entry.log_id << ")" << std::endl;
