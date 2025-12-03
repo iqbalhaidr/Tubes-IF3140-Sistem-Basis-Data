@@ -68,12 +68,14 @@ struct ExecutionResult {
     Rows<Row> data;
     int affected_rows;
     bool success;
+    std::string table_name;
 
     ExecutionResult()
         : transaction_id(-1),
           timestamp(std::time(nullptr)),
           affected_rows(0),
-          success(false) {}
+          success(false),
+          table_name("") {}
 };
 
 // Concurrency Control
@@ -155,7 +157,9 @@ enum class Operation {
     UPDATE,
     INSERT,
     DELETE,
-    CHECKPOINT
+    CHECKPOINT,
+    CREATE_TABLE,
+    DROP_TABLE
 };
 
 struct RecoverCriteria {
@@ -175,6 +179,8 @@ struct LogEntry {
     Row old_value;
     Row new_value;
     std::string query;
+    std::optional<TableSchema> dropped_schema;
+    std::optional<TableSchema> created_schema;
 
     LogEntry() : log_id(-1), transaction_id(-1), timestamp(std::time(nullptr)) {}
 };
