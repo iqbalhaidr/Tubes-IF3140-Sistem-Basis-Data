@@ -18,9 +18,9 @@ void insert_test_data(mdbms::sm::StorageEngine& storage, const std::string& tabl
     insert.is_insert = true;
     insert.new_value.table_name = table;
     insert.new_value.columns = {
-        {"StudentID", id},
-        {"FullName", name},
-        {"GPA", gpa}
+        {"id", id},      // Match schema: lowercase
+        {"name", name},  // Match schema: lowercase
+        {"gpa", gpa}     // Match schema: lowercase
     };
     storage.write_block(insert);
 }
@@ -32,50 +32,17 @@ public:
     std::unique_ptr<mdbms::qp::QueryProcessor> qp;
 
     IntegrationTestSetup(const std::string& dir) : test_dir(dir) {
-        // Clean up any existing data from previous tests
-        cleanup_data_directory();
+        // Clear buffer pool from previous test
+        auto& storage = mdbms::sm::StorageEngine::get_instance();
+        storage.clear_buffer_for_testing();
         
         std::filesystem::create_directory(test_dir);
         // All components are singletons, QueryProcessor uses get_instance() for all
         qp = std::make_unique<mdbms::qp::QueryProcessor>();
-        
-        // Create Student table schema
-        create_student_table();
     }
 
     ~IntegrationTestSetup() {
         std::filesystem::remove_all(test_dir);
-        // Also cleanup singleton's data directory
-        cleanup_data_directory();
-    }
-    
-    void cleanup_data_directory() {
-        // Clear the buffer pool first (flushes dirty pages)
-        auto& storage = mdbms::sm::StorageEngine::get_instance();
-        storage.clear_buffer_for_testing();
-        
-        // Remove all data files
-        std::string data_dir = "data";
-        if (std::filesystem::exists(data_dir)) {
-            // Remove all .dat and .schema files
-            for (const auto& entry : std::filesystem::directory_iterator(data_dir)) {
-                if (entry.is_regular_file()) {
-                    std::filesystem::remove(entry.path());
-                }
-            }
-        }
-    }
-    
-    void create_student_table() {
-        mdbms::TableSchema student_schema;
-        student_schema.table_name = "Student";
-        student_schema.column_names = {"StudentID", "FullName", "GPA"};
-        student_schema.column_types = {mdbms::DataType::INTEGER, mdbms::DataType::VARCHAR, mdbms::DataType::FLOAT};
-        student_schema.column_sizes = {0, 100, 0};
-        student_schema.primary_key = "StudentID";
-        student_schema.foreign_keys = {};
-        
-        mdbms::sm::StorageEngine::get_instance().create_table(student_schema);
     }
 
     void insert_student_direct(int id, const std::string& name, float gpa) {
@@ -90,18 +57,13 @@ public:
 bool test_basic_integration() {
     std::cout << "\n=== TEST 1: Basic Integration (QP + QO + SM + CCM + FRM) ===" << std::endl;
 
-    // Setup test environment (creates Student table)
-    IntegrationTestSetup setup("test1_tmp");
-    
-    // Insert test data
-    setup.insert_student_direct(1, "Alice", 3.8f);
-    setup.insert_student_direct(2, "Bob", 3.5f);
-    setup.insert_student_direct(3, "Charlie", 3.9f);
+    // All components are singletons, QueryProcessor uses get_instance() for all
+    mdbms::qp::QueryProcessor qp;
 
     const std::string query = "SELECT * FROM Student";
     std::ostringstream captured_output;
     auto* original_buf = std::cout.rdbuf(captured_output.rdbuf());
-    const auto result = setup.qp->execute_query(query);
+    const auto result = qp.execute_query(query);
     std::cout.rdbuf(original_buf);
 
     bool passed = true;
@@ -394,8 +356,8 @@ bool test_full_workflow() {
     mdbms::qo::ParsedQuery update_query;
     update_query.query_type = "UPDATE";
     update_query.from_tables.push_back("Student");
-    update_query.set_values["GPA"] = 4.0f;
-    update_query.where_conditions.push_back(mdbms::Condition("StudentID", "=", 1));
+    update_query.set_values["gpa"] = 4.0f;
+    update_query.where_conditions.push_back(mdbms::Condition("id", "=", 1));
     
     int update_txn = setup.qp->begin_transaction();
     int affected = setup.qp->execute_update(update_query, update_txn);
@@ -413,7 +375,7 @@ bool test_full_workflow() {
     verify_query.query_type = "SELECT";
     verify_query.select_columns = {"*"};
     verify_query.from_tables.push_back("Student");
-    verify_query.where_conditions.push_back(mdbms::Condition("StudentID", "=", 1));
+    verify_query.where_conditions.push_back(mdbms::Condition("id", "=", 1));
     
     int verify_txn = setup.qp->begin_transaction();
     auto verify_result = setup.qp->execute_select(verify_query, verify_txn);
@@ -426,7 +388,7 @@ bool test_full_workflow() {
     
     // Verify the GPA was actually updated
     if (!verify_result.data.empty()) {
-        float gpa = std::any_cast<float>(verify_result.data[0].columns.at("GPA"));
+        float gpa = std::any_cast<float>(verify_result.data[0].columns.at("gpa"));
         if (gpa != 4.0f) {
             std::cerr << "[FAIL] GPA not updated correctly, expected 4.0, got " << gpa << std::endl;
             return false;
@@ -551,8 +513,8 @@ bool test_failure_recovery_integration() {
     mdbms::qo::ParsedQuery update_query;
     update_query.query_type = "UPDATE";
     update_query.from_tables.push_back("Student");
-    update_query.set_values["GPA"] = 4.0f;
-    update_query.where_conditions.push_back(mdbms::Condition("StudentID", "=", 1));
+    update_query.set_values["gpa"] = 4.0f;
+    update_query.where_conditions.push_back(mdbms::Condition("id", "=", 1));
     
     int update_txn = setup.qp->begin_transaction();
     int affected = setup.qp->execute_update(update_query, update_txn);
@@ -609,8 +571,8 @@ bool test_failure_recovery_integration() {
     mdbms::qo::ParsedQuery update_query2;
     update_query2.query_type = "UPDATE";
     update_query2.from_tables.push_back("Student");
-    update_query2.set_values["GPA"] = 3.9f;
-    update_query2.where_conditions.push_back(mdbms::Condition("StudentID", "=", 2));
+    update_query2.set_values["gpa"] = 3.9f;
+    update_query2.where_conditions.push_back(mdbms::Condition("id", "=", 2));
     setup.qp->execute_update(update_query2, abort_txn);
     
     std::ostringstream captured_output5;
