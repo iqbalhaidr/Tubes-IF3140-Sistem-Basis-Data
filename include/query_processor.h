@@ -37,6 +37,7 @@ public:
 
     // Rollback semua perubahan yang dilakukan oleh transaksi. Meminta Failure Recovery Manager untuk melakukan UNDO.
     bool abort_transaction(int transaction_id);
+    bool abort_transaction_old(int transaction_id); // Old version without FRM integration
 
     // Method tiap query
     Rows<Row> execute_select(const mdbms::qo::ParsedQuery& parsed_query, int transaction_id);

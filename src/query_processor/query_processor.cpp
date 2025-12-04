@@ -989,6 +989,10 @@ bool QueryProcessor::execute_drop_table(const mdbms::qo::ParsedQuery& parsed_que
         }
 
         std::string table_name = parsed_query.target_table;
+        
+        if (frm_manager) {
+            frm_manager->prepare_ddl_operation(table_name, Operation::DROP_TABLE);
+        }
 
         if (ccm_manager) {
             Row request;

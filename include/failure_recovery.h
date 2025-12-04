@@ -27,6 +27,9 @@ public:
     void commit_transaction(int transaction_id);
     void abort_transaction(int transaction_id);
 
+    // DDL operation handling
+    void prepare_ddl_operation(const std::string& table_name, Operation op);
+
     // Untuk testing purposes
     std::vector<LogEntry> read_all_logs_public(const std::string& file_path);
     void debug_run_crash_recovery();
@@ -66,6 +69,7 @@ private:
     int next_log_id;
     int next_checkpoint_id;
     sm::StorageEngine& storage_engine_;
+    std::unordered_map<std::string, TableSchema> pending_drop_schemas_;
     
     // Periodic checkpoint thread
     std::thread checkpoint_thread_;

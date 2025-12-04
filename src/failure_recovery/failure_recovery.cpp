@@ -62,7 +62,7 @@ FailureRecoveryManager::FailureRecoveryManager()
     this->next_log_id = 1;
     this->next_checkpoint_id = 1;
     // path untuk menyimpan log file
-    this->log_file_path = "../data/wal.bin";
+    this->log_file_path = "data/wal.bin";
     std::cout << "FRM: Konstruktor FailureRecoveryManager dipanggil..." << std::endl;
     std::cout << "FRM: Log file path: " << this->log_file_path << std::endl;
 
@@ -161,15 +161,22 @@ void FailureRecoveryManager::write_log(const ExecutionResult& info) {
         }
     } else if (entry.operation == Operation::DROP_TABLE) {
         entry.table_name = info.table_name;
-        try {
-            TableSchema schema = storage_engine_.get_table_schema(entry.table_name);
-            entry.dropped_schema = schema;
+        auto it = pending_drop_schemas_.find(entry.table_name);
+        if (it != pending_drop_schemas_.end()) {
+            entry.dropped_schema = it->second;
+            pending_drop_schemas_.erase(it);
             std::cout << "FRM: Logging DROP TABLE untuk table " 
-                      << entry.table_name << " (schema saved for recovery)" << std::endl;
-        } catch (const std::exception& e) {
-            std::cerr << "FRM Warning: Gagal mendapatkan schema untuk tabel yang di-drop: " 
-                      << entry.table_name << ". Error: " << e.what() << std::endl;
-            entry.dropped_schema = std::nullopt;
+                    << entry.table_name << " (schema dari cache)" << std::endl;
+        } else {
+            try {
+                TableSchema schema = storage_engine_.get_table_schema(entry.table_name);
+                entry.dropped_schema = schema;
+                std::cout << "FRM: Logging DROP TABLE untuk table " 
+                        << entry.table_name << " (schema dari disk - fallback)" << std::endl;
+            } catch (const std::exception& e) {
+                std::cerr << "FRM Warning: Schema tidak tersedia: " << e.what() << std::endl;
+                entry.dropped_schema = std::nullopt;
+            }
         }
     } else {
         // SELECT (Commit non-data): kosongkan field data
@@ -1283,7 +1290,7 @@ void FailureRecoveryManager::flush_buffer() {
         return;
     }
 
-    std::string text_log_path = "../data/wal.log";
+    std::string text_log_path = "data/wal.log";
     std::ofstream text_file(text_log_path, std::ios::app);
 
     for (const auto& entry : this->log_buffer) {
@@ -1336,6 +1343,22 @@ void FailureRecoveryManager::checkpoint_worker() {
     }
     
     std::cout << "FRM: Checkpoint worker thread exiting" << std::endl;
+}
+
+void FailureRecoveryManager::prepare_ddl_operation(const std::string& table_name, Operation op) {
+    std::lock_guard<std::mutex> lock(this->mtx);
+    
+    if (op == Operation::DROP_TABLE) {
+        try {
+            TableSchema schema = storage_engine_.get_table_schema(table_name);
+            pending_drop_schemas_[table_name] = schema;
+            std::cout << "FRM: Schema untuk DROP TABLE " << table_name 
+                      << " disimpan di cache." << std::endl;
+        } catch (const std::exception& e) {
+            std::cerr << "FRM Warning: Gagal backup schema untuk " << table_name 
+                      << ": " << e.what() << std::endl;
+        }
+    }
 }
 
 } // namespace mdbms::fr
