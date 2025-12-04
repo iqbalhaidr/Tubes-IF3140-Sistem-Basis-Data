@@ -12,6 +12,7 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <cstdint>
 
 #include "query_processor.h"
 #include "types.h"
@@ -27,6 +28,8 @@ std::atomic<int> client_count{0};
 
 // Forward declaration
 std::string format_rows(const mdbms::Rows<mdbms::Row>& rows);
+bool send_framed_message(int socket_fd, const std::string& payload);
+bool send_all(int socket_fd, const char* data, size_t length);
 
 // Helper function to format ExecutionResult to string
 std::string format_execution_result(const mdbms::ExecutionResult& result) {
@@ -178,6 +181,33 @@ std::string format_rows(const mdbms::Rows<mdbms::Row>& rows) {
     return oss.str();
 }
 
+// Send the full buffer over the socket, retrying if only part of it is sent.
+bool send_all(int socket_fd, const char* data, size_t length) {
+    size_t total_sent = 0;
+    while (total_sent < length) {
+        ssize_t bytes_sent = send(socket_fd, data + total_sent, length - total_sent, 0);
+        if (bytes_sent <= 0) {
+            return false;
+        }
+        total_sent += static_cast<size_t>(bytes_sent);
+    }
+    return true;
+}
+
+// Frame messages with a 4-byte length prefix so the client knows when the message ends.
+bool send_framed_message(int socket_fd, const std::string& payload) {
+    uint32_t length = static_cast<uint32_t>(payload.size());
+    uint32_t net_length = htonl(length);
+
+    if (!send_all(socket_fd, reinterpret_cast<char*>(&net_length), sizeof(net_length))) {
+        return false;
+    }
+    if (length == 0) {
+        return true;
+    }
+    return send_all(socket_fd, payload.data(), length);
+}
+
 // Function to handle a single client connection
 void handle_client(int client_socket, int client_id) {
     char buffer[BUFFER_SIZE];
@@ -195,7 +225,15 @@ void handle_client(int client_socket, int client_id) {
     
     // Send welcome message
     std::string welcome = "Connected to server. Send your queries (type 'exit' to disconnect).\n";
-    send(client_socket, welcome.c_str(), welcome.length(), 0);
+    if (!send_framed_message(client_socket, welcome)) {
+        {
+            std::lock_guard<std::mutex> lock(server_mutex);
+            std::cerr << "[SERVER] Failed to send welcome message to " << client_info << std::endl;
+        }
+        close(client_socket);
+        client_count--;
+        return;
+    }
     
     while (true) {
         // Clear buffer
@@ -236,7 +274,7 @@ void handle_client(int client_socket, int client_id) {
         // Check for exit command
         if (query == "exit" || query == "EXIT" || query == "quit" || query == "QUIT") {
             std::string response = "Goodbye! Connection closing.\n";
-            send(client_socket, response.c_str(), response.length(), 0);
+            send_framed_message(client_socket, response);
             break;
         }
         
@@ -273,8 +311,7 @@ void handle_client(int client_socket, int client_id) {
         }
         
         // Send response back to client
-        ssize_t bytes_sent = send(client_socket, response.c_str(), response.length(), 0);
-        if (bytes_sent < 0) {
+        if (!send_framed_message(client_socket, response)) {
             std::lock_guard<std::mutex> lock(server_mutex);
             std::cerr << "[SERVER] Error sending response to " << client_info << std::endl;
             break;
@@ -352,7 +389,7 @@ int main() {
         // Check if we've reached max clients
         if (client_count.load() >= MAX_CLIENTS) {
             std::string reject_msg = "Server is at maximum capacity. Please try again later.\n";
-            send(client_socket, reject_msg.c_str(), reject_msg.length(), 0);
+            send_framed_message(client_socket, reject_msg);
             close(client_socket);
             continue;
         }

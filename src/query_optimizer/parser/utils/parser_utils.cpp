@@ -287,7 +287,7 @@ Condition parse_condition(const std::string& raw_condition) {
         }
 
         condition.column = trim(trimmed.substr(0, pos));
-        condition.operation = (token == "!=") ? "<>" : std::string(token);
+        condition.operation = (token == "<>") ? "!=" : std::string(token);
         std::string rhs = trim(trimmed.substr(pos + token.size()));
         condition.operand = parse_literal(rhs);
         return condition;
