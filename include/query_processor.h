@@ -49,6 +49,14 @@ public:
     Rows<Row> apply_where_clause(const Rows<Row>& rows,const std::vector<Condition>& conditions);
     Rows<Row> apply_order_by(const Rows<Row>& rows, const std::string& column, bool ascending);
     Rows<Row> apply_limit(const Rows<Row>& rows, int limit);
+    
+    Rows<Row> apply_table_aliases(const Rows<Row>& rows, const std::string& table_name, 
+                                   const std::map<std::string, std::string>& table_aliases);
+    std::string resolve_aliased_column(const std::string& column, 
+                                        const std::map<std::string, std::string>& table_aliases);
+    
+    std::string get_table_from_alias(const std::string& alias,
+                                      const std::map<std::string, std::string>& table_aliases);
 private:
     mdbms::qo::OptimizationEngine* qo_engine;  // Singleton
     mdbms::sm::StorageEngine* sm_engine;  // Singleton
