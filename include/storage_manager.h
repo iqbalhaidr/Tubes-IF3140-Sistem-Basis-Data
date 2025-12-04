@@ -50,6 +50,9 @@ public:
     // Checkpoint: flush all dirty pages to disk
     void checkpoint();
     
+    // Evict all pages for a table from buffer WITHOUT flushing (for delete_table)
+    void evict_table_without_flush(const std::string& table_name);
+    
     // Check if buffer is near full (80% capacity)
     bool is_near_full() const;
     
