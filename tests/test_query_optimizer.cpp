@@ -9,46 +9,46 @@
 #include <unordered_map>
 #include <vector>
 
-namespace mdbms::sm {
-StorageEngine::StorageEngine() = default;
-StorageEngine::StorageEngine(const std::string& /*data_dir*/) {}
+// namespace mdbms::sm {
+// StorageEngine::StorageEngine() = default;
+// StorageEngine::StorageEngine(const std::string& /*data_dir*/) {}
 
-std::map<std::string, Statistic> StorageEngine::get_stats() {
-    std::map<std::string, Statistic> stats;
+// std::map<std::string, Statistic> StorageEngine::get_stats() {
+//     std::map<std::string, Statistic> stats;
 
-    stats["student"] = [] {
-        Statistic s;
-        s.table_name = "student";
-        s.n_r = 1000;
-        s.b_r = 20;
-        s.f_r = 50;
-        s.V_a_r = {{"id", 1000}, {"dept_id", 10}, {"apt_id", 50}, {"age", 60}};
-        return s;
-    }();
+//     stats["student"] = [] {
+//         Statistic s;
+//         s.table_name = "student";
+//         s.n_r = 1000;
+//         s.b_r = 20;
+//         s.f_r = 50;
+//         s.V_a_r = {{"id", 1000}, {"dept_id", 10}, {"apt_id", 50}, {"age", 60}};
+//         return s;
+//     }();
 
-    stats["dept"] = [] {
-        Statistic s;
-        s.table_name = "dept";
-        s.n_r = 10;
-        s.b_r = 2;
-        s.f_r = 30;
-        s.V_a_r = {{"id", 10}, {"size", 10}, {"location", 3}, {"nama", 10}};
-        return s;
-    }();
+//     stats["dept"] = [] {
+//         Statistic s;
+//         s.table_name = "dept";
+//         s.n_r = 10;
+//         s.b_r = 2;
+//         s.f_r = 30;
+//         s.V_a_r = {{"id", 10}, {"size", 10}, {"location", 3}, {"nama", 10}};
+//         return s;
+//     }();
 
-    stats["apt"] = [] {
-        Statistic s;
-        s.table_name = "apt";
-        s.n_r = 50;
-        s.b_r = 5;
-        s.f_r = 40;
-        s.V_a_r = {{"id", 50}, {"name", 50}, {"type", 5}, {"active", 2}};
-        return s;
-    }();
+//     stats["apt"] = [] {
+//         Statistic s;
+//         s.table_name = "apt";
+//         s.n_r = 50;
+//         s.b_r = 5;
+//         s.f_r = 40;
+//         s.V_a_r = {{"id", 50}, {"name", 50}, {"type", 5}, {"active", 2}};
+//         return s;
+//     }();
 
-    return stats;
-}
-}  // namespace mdbms::sm
+//     return stats;
+// }
+// }  // namespace mdbms::sm
 
 namespace {
 

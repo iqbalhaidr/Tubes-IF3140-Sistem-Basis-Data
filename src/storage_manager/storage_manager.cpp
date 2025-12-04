@@ -17,12 +17,28 @@
 
 namespace mdbms::sm {
 
-StorageEngine::StorageEngine() : data_dir_("data") {
+StorageEngine::StorageEngine() : data_dir_("data"), buffer_manager_(data_dir_) {
     hash_index_engine = HashIndexEngine();
 }
 
-StorageEngine::StorageEngine(const std::string& data_dir) : data_dir_(data_dir) {
+StorageEngine::StorageEngine(const std::string& data_dir) : data_dir_(data_dir), buffer_manager_(data_dir) {
     hash_index_engine = HashIndexEngine(data_dir);
+}
+
+StorageEngine::~StorageEngine() {
+    buffer_manager_.flush_all();
+}
+
+void StorageEngine::clear_buffer_for_testing() {
+    buffer_manager_.clear_buffer();
+}
+
+void StorageEngine::checkpoint() {
+    buffer_manager_.checkpoint();
+}
+
+bool StorageEngine::is_buffer_near_full() const {
+    return buffer_manager_.is_near_full();
 }
 
 Rows<Row> StorageEngine::read_block(const DataRetrieval& retrieval) {
@@ -30,6 +46,7 @@ Rows<Row> StorageEngine::read_block(const DataRetrieval& retrieval) {
     TableSchema schema;
     try {
         schema = get_table_schema(retrieval.table);
+        buffer_manager_.register_schema(retrieval.table, schema);
     } catch (const std::runtime_error& e) {
         std::cerr << "SM: Error - " << e.what() << std::endl;
         return result;
@@ -95,13 +112,6 @@ Rows<Row> StorageEngine::read_using_offsets(const DataRetrieval& retrieval, cons
         return result;
     }
 
-    std::string datafile = data_dir_ + "/" + retrieval.table + ".dat";
-    std::ifstream din(datafile, std::ios::binary);
-    if (!din.is_open()) {
-        std::cerr << "SM: Gagal membuka file data: " << datafile << std::endl;
-        return result;
-    }
-
     bool select_all = std::find(retrieval.columns.begin(), retrieval.columns.end(), "*") != retrieval.columns.end();
 
     if (select_all) {
@@ -110,29 +120,39 @@ Rows<Row> StorageEngine::read_using_offsets(const DataRetrieval& retrieval, cons
         result.column_names = retrieval.columns;
     }
 
+    // Group offsets by page_id for efficient buffer usage
+    std::map<int, std::vector<int64_t>> offsets_by_page;
     for (int64_t off : offsets) {
         if (off < 0) continue;
-        din.clear();
-        din.seekg(off, std::ios::beg);
-        if (!din.good()) continue;
-
-        Row r = deserialize_row(din, schema);
-        if (r.columns.empty()) continue;
-
-        if (!check_conditions(r, retrieval.conditions)) continue;
-
-        Row projected;
-        projected.table_name = retrieval.table;
-        if (select_all) {
-            projected = r;
-        } else {
-            for (const auto &col : retrieval.columns) {
-                if (r.columns.count(col)) projected.columns[col] = r.columns.at(col);
-            }
-        }
-        result.data.push_back(projected);
+        int page_id = BufferManager::offset_to_page_id(off);
+        offsets_by_page[page_id].push_back(off);
     }
-    din.close();
+
+    // Process each page
+    for (const auto& [page_id, page_offsets] : offsets_by_page) {
+        BufferPage* page = buffer_manager_.get_page(retrieval.table, page_id, schema);
+        
+        if (!page) continue;
+
+        // Scan all rows in the page that match our offsets
+        for (const Row& r : page->rows) {
+            if (!check_conditions(r, retrieval.conditions)) continue;
+
+            Row projected;
+            projected.table_name = retrieval.table;
+            if (select_all) {
+                projected = r;
+            } else {
+                for (const auto &col : retrieval.columns) {
+                    if (r.columns.count(col)) projected.columns[col] = r.columns.at(col);
+                }
+            }
+            result.data.push_back(projected);
+        }
+
+        buffer_manager_.unpin_page(retrieval.table, page_id, false);
+    }
+
     result.rows_count = result.data.size();
     return result;
 }
@@ -147,14 +167,6 @@ Rows<Row> StorageEngine::full_scan(const DataRetrieval& retrieval) {
         return result;
     }
 
-    std::string filename = data_dir_ + "/" + retrieval.table + ".dat";
-    std::ifstream file(filename, std::ios::binary);
-
-    if (!file.is_open()) {
-        std::cerr << "SM: Gagal membuka file: " << filename << std::endl;
-        return result;
-    }
-
     bool select_all = std::find(retrieval.columns.begin(), retrieval.columns.end(), "*") != retrieval.columns.end();
 
     if (select_all) {
@@ -163,32 +175,37 @@ Rows<Row> StorageEngine::full_scan(const DataRetrieval& retrieval) {
         result.column_names = retrieval.columns;
     }
 
-    while (file.peek() != EOF) {
-        Row row = deserialize_row(file, schema);
-        if (row.columns.empty()) {
-            if (file.eof()) break;
-            std::cerr << "SM: Error membaca baris data." << std::endl;
-            break;
-        }
+    // Determine how many pages to scan (from buffer + disk)
+    int max_page_id = buffer_manager_.get_max_page_id(retrieval.table);
+    int num_pages = max_page_id + 1; // page_id starts from 0
 
-        if (check_conditions(row, retrieval.conditions)) {
-            Row projected_row;
-            projected_row.table_name = retrieval.table;
+    // Scan each page
+    for (int page_id = 0; page_id < num_pages; page_id++) {
+        BufferPage* page = buffer_manager_.get_page(retrieval.table, page_id, schema);
+        
+        if (!page) continue;
 
-            if (select_all) {
-                projected_row = row;
-            } else {
-                for (const auto& col_name : retrieval.columns) {
-                    if (row.columns.count(col_name)) {
-                        projected_row.columns[col_name] = row.columns.at(col_name);
+        for (const Row& row : page->rows) {
+            if (check_conditions(row, retrieval.conditions)) {
+                Row projected_row;
+                projected_row.table_name = retrieval.table;
+
+                if (select_all) {
+                    projected_row = row;
+                } else {
+                    for (const auto& col_name : retrieval.columns) {
+                        if (row.columns.count(col_name)) {
+                            projected_row.columns[col_name] = row.columns.at(col_name);
+                        }
                     }
                 }
+                result.data.push_back(projected_row);
             }
-            result.data.push_back(projected_row);
         }
+
+        buffer_manager_.unpin_page(retrieval.table, page_id, false);
     }
 
-    file.close();
     result.rows_count = result.data.size();
     return result;
 }
@@ -197,6 +214,7 @@ int StorageEngine::write_block(const DataWrite<Row>& write) {
     TableSchema schema;
     try {
         schema = get_table_schema(write.table);
+        buffer_manager_.register_schema(write.table, schema);
     } catch (const std::runtime_error& e) {
         std::cerr << "SM: Error - " << e.what() << std::endl;
         return 0;
@@ -220,23 +238,56 @@ int StorageEngine::write_block(const DataWrite<Row>& write) {
     }
     std::cout << std::endl;
 
-    // INSERT no condition
+    // INSERT no condition - Use Buffer Manager
     if (write.conditions.empty()) {
-        std::cout << "[DEBUG] SM write_block: Opening file for append..." << std::endl;
-        std::ofstream file(filename, std::ios::binary | std::ios::app);
+        std::cout << "[DEBUG] SM write_block: INSERT using buffer..." << std::endl;
 
-        if (!file.is_open()) {
-            std::cerr << "[DEBUG] SM: Gagal membuka file: " << filename << std::endl;
-            std::cerr << "[DEBUG] SM: Error details - file may not exist or directory may not exist" << std::endl;
-            return 0;
+        // Determine number of existing pages
+        int num_pages = 0;
+        if (std::filesystem::exists(filename)) {
+            auto file_size = std::filesystem::file_size(filename);
+            num_pages = static_cast<int>((file_size + PAGE_SIZE - 1) / PAGE_SIZE);
         }
-        std::cout << "[DEBUG] SM write_block: File opened successfully" << std::endl;
 
-        file.seekp(0, std::ios::end);
-        int64_t row_offset = file.tellp();
-        serialize_row(file, write.new_value, schema);
-        file.close();
+        // Try to add to last page first
+        BufferPage* page = nullptr;
+        int target_page_id = -1;
 
+        if (num_pages > 0) {
+            target_page_id = num_pages - 1;
+            page = buffer_manager_.get_page(write.table, target_page_id, schema);
+            
+            // Check if row fits in this page
+            size_t current_size = 0;
+            for (const auto& row : page->rows) {
+                current_size += estimate_row_size(row, schema);
+            }
+            size_t new_row_size = estimate_row_size(write.new_value, schema);
+            
+            if (current_size + new_row_size > PAGE_SIZE) {
+                // Page is full, need new page
+                buffer_manager_.unpin_page(write.table, target_page_id, false);
+                page = buffer_manager_.new_page(write.table);
+                target_page_id = page->page_id;
+            }
+        } else {
+            // No pages yet, create first page
+            page = buffer_manager_.new_page(write.table);
+            target_page_id = page->page_id;
+        }
+
+        // Calculate row offset for index
+        size_t row_index_in_page = page->rows.size();
+        int64_t row_offset = BufferManager::page_id_to_offset(target_page_id);
+        for (size_t i = 0; i < row_index_in_page; i++) {
+            row_offset += estimate_row_size(page->rows[i], schema);
+        }
+
+        // Add row to page
+        page->rows.push_back(write.new_value);
+        buffer_manager_.unpin_page(write.table, target_page_id, true);
+
+        // Update index
         if (hash_index_engine.table_index.count(write.table)) {
             std::string col = hash_index_engine.table_index[write.table];
             hash_index_engine.update_index_after_insert(
@@ -244,58 +295,60 @@ int StorageEngine::write_block(const DataWrite<Row>& write) {
             );
         }
 
+        std::cout << "[DEBUG] SM write_block: INSERT completed" << std::endl;
         return 1;
     }
 
-    // UPDATE
-    std::string temp_filename = data_dir_ + "/" + write.table + ".tmp";
-
-    std::ifstream infile(filename, std::ios::binary);
-    std::ofstream outfile(temp_filename, std::ios::binary);
-
-    if (!infile.is_open() || !outfile.is_open()) {
-        std::cerr << "SM: Gagal membuka file (temp) untuk UPDATE" << std::endl;
-        return 0;
-    }
+    // UPDATE - Use Buffer Manager
+    std::cout << "[DEBUG] SM write_block: UPDATE using buffer..." << std::endl;
 
     int affected_rows = 0;
-    int64_t current_offset = 0;
+    
+    // Get max page_id from buffer + disk
+    int max_page_id = buffer_manager_.get_max_page_id(write.table);
+    int num_pages = max_page_id + 1;
 
-    while (true) {
-        current_offset = infile.tellg();
-        if (!infile.good()) break;
+    // Scan each page and update matching rows
+    for (int page_id = 0; page_id < num_pages; page_id++) {
+        BufferPage* page = buffer_manager_.get_page(write.table, page_id, schema);
+        
+        if (!page) continue;
 
-        Row old_row = deserialize_row(infile, schema);
-        if (!infile.good()) break;
+        bool page_modified = false;
+        int64_t current_offset = BufferManager::page_id_to_offset(page_id);
 
-        Row new_row = old_row;
+        for (size_t i = 0; i < page->rows.size(); i++) {
+            Row& row = page->rows[i];
+            
+            if (check_conditions(row, write.conditions)) {
+                Row old_row = row;
 
-        if (check_conditions(old_row, write.conditions)) {
-            // UPDATE
-            for (const auto& col_name : write.columns) {
-                if (write.new_value.columns.count(col_name)) {
-                    new_row.columns[col_name] =
-                        write.new_value.columns.at(col_name);
+                // UPDATE columns
+                for (const auto& col_name : write.columns) {
+                    if (write.new_value.columns.count(col_name)) {
+                        row.columns[col_name] = write.new_value.columns.at(col_name);
+                    }
+                }
+                
+                affected_rows++;
+                page_modified = true;
+
+                // Update index
+                if (hash_index_engine.table_index.count(write.table)) {
+                    std::string col = hash_index_engine.table_index[write.table];
+                    hash_index_engine.update_index_after_update(
+                        write.table, col, current_offset, old_row, row
+                    );
                 }
             }
-            affected_rows++;
 
-            if (this->hash_index_engine.table_index.count(write.table)) {
-                std::string col = hash_index_engine.table_index[write.table];
-                hash_index_engine.update_index_after_update(
-                    write.table, col, current_offset, old_row, new_row
-                );
-            }
+            current_offset += estimate_row_size(row, schema);
         }
-        serialize_row(outfile, new_row, schema);
+
+        buffer_manager_.unpin_page(write.table, page_id, page_modified);
     }
 
-    infile.close();
-    outfile.close();
-
-    std::remove(filename.c_str());
-    std::rename(temp_filename.c_str(), filename.c_str());
-
+    std::cout << "[DEBUG] SM write_block: UPDATE completed, affected " << affected_rows << " rows" << std::endl;
     return affected_rows;
 }
 
@@ -303,63 +356,58 @@ int StorageEngine::delete_block(const DataDeletion& deletion) {
     TableSchema schema;
     try {
         schema = get_table_schema(deletion.table);
+        buffer_manager_.register_schema(deletion.table, schema);
     } catch (const std::runtime_error& e) {
         std::cerr << "SM: Error - " << e.what() << std::endl;
         return 0;
     }
 
     std::string table = deletion.table;
-    std::string filename = data_dir_ + "/" + table + ".dat";
-    std::string temp_filename = data_dir_ + "/" + table + ".tmp";
-
-    std::ifstream infile(filename, std::ios::binary);
-    std::ofstream outfile(temp_filename, std::ios::binary);
-
-    if (!infile.is_open() || !outfile.is_open()) {
-        std::cerr << "SM: Gagal membuka file (temp) untuk DELETE" << std::endl;
-        return 0;
-    }
 
     int affected_rows = 0;
-    int64_t row_offset = 0;
+    
+    // Get max page_id from buffer + disk
+    int max_page_id = buffer_manager_.get_max_page_id(table);
+    int num_pages = max_page_id + 1;
 
-    while (true) {
-        row_offset = infile.tellg();
-        if (infile.peek() == EOF) break;
+    // Scan each page and delete matching rows
+    for (int page_id = 0; page_id < num_pages; page_id++) {
+        BufferPage* page = buffer_manager_.get_page(table, page_id, schema);
+        
+        if (!page) continue;
 
-        Row row = deserialize_row(infile, schema);
+        bool page_modified = false;
+        int64_t current_offset = BufferManager::page_id_to_offset(page_id);
+        
+        // Delete matching rows (iterate backwards to avoid iterator invalidation)
+        for (int i = static_cast<int>(page->rows.size()) - 1; i >= 0; i--) {
+            const Row& row = page->rows[i];
+            
+            if (check_conditions(row, deletion.conditions)) {
+                // Update Index before deleting
+                if (hash_index_engine.table_index.count(table)) {
+                    std::string col = hash_index_engine.table_index[table];
+                    int64_t row_offset = current_offset;
+                    for (int j = 0; j < i; j++) {
+                        row_offset += estimate_row_size(page->rows[j], schema);
+                    }
+                    hash_index_engine.update_index_after_delete(table, col, row_offset, row);
+                }
 
-        if (row.columns.empty()) {
-            if (infile.eof()) break;
-            continue;
-        }
-
-        if (check_conditions(row, deletion.conditions)) {
-            // Update Index
-            if (hash_index_engine.table_index.count(table)) {
-                std::string col = hash_index_engine.table_index[table];
-                hash_index_engine.update_index_after_delete(table, col, row_offset, row);
+                // Remove row from page
+                page->rows.erase(page->rows.begin() + i);
+                affected_rows++;
+                page_modified = true;
             }
-
-            affected_rows++;
-        } else {
-            serialize_row(outfile, row, schema);
         }
+
+        buffer_manager_.unpin_page(table, page_id, page_modified);
     }
 
-    infile.close();
-    outfile.close();
+    // Flush all pages to ensure deletion is persisted
+    buffer_manager_.flush_all();
 
-    if (std::remove(filename.c_str()) != 0) {
-        std::cerr << "SM: Gagal menghapus file asli: " << filename << std::endl;
-        std::remove(temp_filename.c_str());
-        return -1;
-    }
-    if (std::rename(temp_filename.c_str(), filename.c_str()) != 0) {
-        std::cerr << "SM: Gagal mengganti nama file temp: " << temp_filename << std::endl;
-        return -1;
-    }
-
+    std::cout << "[DEBUG] SM delete_block: Deleted " << affected_rows << " rows" << std::endl;
     return affected_rows;
 }
 
@@ -476,15 +524,15 @@ TableSchema StorageEngine::get_table_schema(const std::string& table) {
 }
 
 bool StorageEngine::create_table(const TableSchema& schema) {
+    // update tables.meta FIRST before truncating schema file
+    if (!check_and_update_tables_metadata(schema)) return false;
+    
     std::string schema_filename = data_dir_ + "/" + schema.table_name + ".schema";
     std::ofstream outfile(schema_filename, std::ios::binary | std::ios::trunc);
     if (!outfile.is_open()) {
         std::cerr << "SM: Gagal membuka file schema untuk tabel: " << schema.table_name << std::endl;
         throw std::runtime_error("Gagal membuka file schema");
     }
-
-    // update tables.meta
-    if (!check_and_update_tables_metadata(schema)) return false;
     
     // write number of columns (aint no way number of columns exceed 2^16)
     uint16_t columns_len = schema.column_names.size();
@@ -1203,6 +1251,38 @@ bool StorageEngine::drop_table(const std::string& table) {
 StorageEngine& StorageEngine::get_instance() {
     static StorageEngine instance;
     return instance;
+}
+
+int64_t StorageEngine::calculate_row_offset_in_page(const BufferPage& page, size_t row_index, const TableSchema& schema) {
+    int64_t offset = 0;
+    for (size_t i = 0; i < row_index && i < page.rows.size(); i++) {
+        offset += estimate_row_size(page.rows[i], schema);
+    }
+    return offset;
+}
+
+size_t StorageEngine::estimate_row_size(const Row& row, const TableSchema& schema) {
+    size_t size = 0;
+    for (size_t i = 0; i < schema.column_names.size(); i++) {
+        const std::string& col_name = schema.column_names[i];
+        DataType col_type = schema.column_types[i];
+
+        if (!row.columns.count(col_name)) continue;
+
+        if (col_type == DataType::INTEGER) {
+            size += sizeof(int32_t);
+        } else if (col_type == DataType::FLOAT) {
+            size += sizeof(float);
+        } else if (col_type == DataType::VARCHAR || col_type == DataType::CHAR) {
+            try {
+                std::string str = std::any_cast<std::string>(row.columns.at(col_name));
+                size += sizeof(uint32_t) + str.length();
+            } catch (...) {
+                size += sizeof(uint32_t); // At least the length field
+            }
+        }
+    }
+    return size;
 }
 
 } // namespace mdbms::sm
