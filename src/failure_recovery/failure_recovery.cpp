@@ -58,7 +58,7 @@ FailureRecoveryManager& FailureRecoveryManager::get_instance() {
 }
 
 FailureRecoveryManager::FailureRecoveryManager() 
-    : storage_engine_(sm::StorageEngine::get_instance()) {
+    : storage_engine_(sm::StorageEngine::get_instance()), running_(true) {
     this->next_log_id = 1;
     this->next_checkpoint_id = 1;
     // path untuk menyimpan log file
@@ -72,10 +72,23 @@ FailureRecoveryManager::FailureRecoveryManager()
     if (!existing.empty()) {
         this->next_log_id = existing.back().log_id + 1;
     }
+    
+    // Start periodic checkpoint thread
+    checkpoint_thread_ = std::thread(&FailureRecoveryManager::checkpoint_worker, this);
+    std::cout << "FRM: Periodic checkpoint thread started (interval: " 
+              << CHECKPOINT_INTERVAL_SECONDS << " seconds)" << std::endl;
 }
 
 FailureRecoveryManager::~FailureRecoveryManager() {
     std::cout << "FRM: Destruktor FailureRecoveryManager dipanggil..." << std::endl;
+    
+    // Stop checkpoint thread
+    running_ = false;
+    if (checkpoint_thread_.joinable()) {
+        checkpoint_thread_.join();
+        std::cout << "FRM: Periodic checkpoint thread stopped" << std::endl;
+    }
+    
     save_checkpoint();
     std::cout << "FRM: Checkpoint terakhir disimpan sebelum keluar..." << std::endl;
 }
@@ -184,13 +197,88 @@ void FailureRecoveryManager::write_log(const ExecutionResult& info) {
               << std::endl;
 }
 
+void FailureRecoveryManager::commit_transaction(int transaction_id) {
+    std::lock_guard<std::mutex> lock(this->mtx);
+    
+    std::cout << "FRM: Committing transaction " << transaction_id << " with WAL protocol..." << std::endl;
+    
+    // tulis commit log entry ke buffer
+    LogEntry commit_entry;
+    commit_entry.log_id = this->next_log_id++;
+    commit_entry.transaction_id = transaction_id;
+    commit_entry.timestamp = std::time(nullptr);
+    commit_entry.operation = Operation::COMMIT;
+    commit_entry.query = "COMMIT";
+    this->log_buffer.push_back(commit_entry);
+    
+    // flush wal
+    std::cout << "FRM: Step 1 - Flushing WAL (COMMIT record to disk)..." << std::endl;
+    flush_buffer();  // ✅ COMMIT record safely on disk
+    
+    // flush data
+    std::cout << "FRM: Step 2 - Flushing data pages to disk..." << std::endl;
+    storage_engine_.checkpoint();  // ✅ Data to disk
+    
+    // apus active transaction
+    active_transactions_cache.erase(transaction_id);
+    
+    std::cout << "FRM: Transaction " << transaction_id << " committed successfully (WAL → Data)" << std::endl;
+}
+
+void FailureRecoveryManager::abort_transaction(int transaction_id) {
+    std::lock_guard<std::mutex> lock(this->mtx);
+
+    std::cout << "FRM: Aborting transaction " << transaction_id << "..." << std::endl;
+    
+    // clear buffer
+    // harusnya clear buffer hanya untuk transaksi yang diabort (tpi skrng masih clear semua)
+    std::cout << "FRM: Discarding uncommitted buffer pages..." << std::endl;
+    storage_engine_.clear_buffer_for_testing(); 
+    
+    // undo dari log untuk data yang sudah diflush ke disk
+    std::cout << "FRM: Performing UNDO from log..." << std::endl;
+    RecoverCriteria criteria;
+    criteria.transaction_id = transaction_id;
+    criteria.use_timestamp = false;
+    recover(criteria);
+    
+    // tulis abort log entry ke buffer
+    LogEntry abort_entry;
+    abort_entry.log_id = this->next_log_id++;
+    abort_entry.transaction_id = transaction_id;
+    abort_entry.timestamp = std::time(nullptr);
+    abort_entry.operation = Operation::ABORT;
+    abort_entry.query = "ABORT";
+    this->log_buffer.push_back(abort_entry);
+    flush_buffer();
+    
+    // apus active transaction
+    active_transactions_cache.erase(transaction_id);
+    
+    std::cout << "FRM: Transaction " << transaction_id << " aborted successfully" << std::endl;
+}
+
 void FailureRecoveryManager::save_checkpoint() {
     std::cout << "FRM: Menyimpan checkpoint..." << std::endl;
     std::lock_guard<std::mutex> lock(this->mtx);
+    
+    // flush wal
+    std::cout << "FRM: Step 1 - Flushing WAL buffer..." << std::endl;
     flush_buffer();
     
-    // Flush all dirty pages from buffer to disk BEFORE writing checkpoint log
-    std::cout << "FRM: Triggering Storage Manager checkpoint (flush dirty pages)..." << std::endl;
+    // tulis checkpoint START log
+    LogEntry checkpoint_start;
+    checkpoint_start.log_id = this->next_log_id++;
+    checkpoint_start.transaction_id = -1;
+    checkpoint_start.timestamp = std::time(nullptr);
+    checkpoint_start.operation = Operation::CHECKPOINT;
+    checkpoint_start.table_name = "SYSTEM";
+    checkpoint_start.query = "CHECKPOINT_START";
+    this->log_buffer.push_back(checkpoint_start);
+    flush_buffer();  // Ensure checkpoint START on disk
+    
+    // flush data
+    std::cout << "FRM: Step 2 - Flushing data pages to disk..." << std::endl;
     storage_engine_.checkpoint();
 
     // Menambahkan entri log untuk checkpoint
@@ -209,7 +297,7 @@ void FailureRecoveryManager::save_checkpoint() {
         first = false;
     }
     active_transactions_str += "]";
-    checkpoint_entry.query = "CHECKPOINT_L:" + active_transactions_str;
+    checkpoint_entry.query = "CHECKPOINT_END:" + active_transactions_str;
 
     this->log_buffer.push_back(checkpoint_entry);
     flush_buffer();
@@ -1225,6 +1313,29 @@ void FailureRecoveryManager::reset_state_for_testing() {
     this->next_log_id = 1;
     this->next_checkpoint_id = 1;
     std::cout << "[TEST] FailureRecoveryManager state reset" << std::endl;
+}
+
+void FailureRecoveryManager::checkpoint_worker() {
+    std::cout << "FRM: Checkpoint worker thread started" << std::endl;
+    
+    while (running_) {
+        // Sleep in small intervals to allow quick shutdown
+        for (int i = 0; i < CHECKPOINT_INTERVAL_SECONDS && running_; i++) {
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+        }
+        
+        if (running_) {
+            std::cout << "\nFRM: [PERIODIC] Triggering automatic checkpoint..." << std::endl;
+            try {
+                save_checkpoint();
+                std::cout << "FRM: [PERIODIC] Automatic checkpoint completed" << std::endl;
+            } catch (const std::exception& e) {
+                std::cerr << "FRM Error: Periodic checkpoint failed - " << e.what() << std::endl;
+            }
+        }
+    }
+    
+    std::cout << "FRM: Checkpoint worker thread exiting" << std::endl;
 }
 
 } // namespace mdbms::fr

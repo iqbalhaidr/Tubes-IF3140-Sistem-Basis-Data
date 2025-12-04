@@ -5,6 +5,9 @@
 #include <sstream>
 #include <mutex>
 #include <set>
+#include <thread>
+#include <atomic>
+#include <chrono>
 #include "types.h"
 #include "storage_manager.h"
 
@@ -19,6 +22,10 @@ public:
     void write_log(const ExecutionResult& info);
     void save_checkpoint();
     void recover(const RecoverCriteria& criteria);
+    
+    // Transaction lifecycle with proper WAL protocol
+    void commit_transaction(int transaction_id);
+    void abort_transaction(int transaction_id);
 
     // Untuk testing purposes
     std::vector<LogEntry> read_all_logs_public(const std::string& file_path);
@@ -59,6 +66,13 @@ private:
     int next_log_id;
     int next_checkpoint_id;
     sm::StorageEngine& storage_engine_;
+    
+    // Periodic checkpoint thread
+    std::thread checkpoint_thread_;
+    std::atomic<bool> running_;
+    const int CHECKPOINT_INTERVAL_SECONDS = 300; // 5 minutes
+    
+    void checkpoint_worker();
     
     // Helper convert struct Operation
     std::string operation_to_string(Operation op);

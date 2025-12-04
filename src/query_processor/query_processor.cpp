@@ -1060,17 +1060,9 @@ bool QueryProcessor::commit_transaction(int transaction_id) {
         ccm_manager->end_transaction(transaction_id);
     }
 
-    // Log to recovery manager
+    // Use FRM commit with proper WAL protocol
     if (frm_manager) {
-        ExecutionResult log_entry;
-        log_entry.transaction_id = transaction_id;
-        log_entry.query = "COMMIT";
-        log_entry.timestamp = std::time(nullptr);
-        log_entry.success = true;
-        frm_manager->write_log(log_entry);
-        
-        // Save checkpoint after commit
-        frm_manager->save_checkpoint();
+        frm_manager->commit_transaction(transaction_id);  // ✅ WAL: Log flush → Data flush
     }
 
     return true;
@@ -1089,12 +1081,35 @@ bool QueryProcessor::abort_transaction(int transaction_id) {
         ccm_manager->end_transaction(transaction_id);
     }
 
+    // Use FRM abort (efficient: discard buffer + UNDO from disk if needed)
+    if (frm_manager) {
+        frm_manager->abort_transaction(transaction_id);  // ✅ Efficient ABORT
+    }
+
+    return true;
+}
+
+// Old abort implementation (for reference, can be removed)
+bool QueryProcessor::abort_transaction_old(int transaction_id) {
+    if (transaction_id == -1) {
+        std::cerr << "QP: No active transaction to abort" << std::endl;
+        return false;
+    }
+
+    std::cout << "QP: Aborting transaction (old method) " << transaction_id << std::endl;
+
+    // End transaction in CCM
+    if (ccm_manager) {
+        ccm_manager->end_transaction(transaction_id);
+    }
+
     // Request recovery manager to UNDO changes
     if (frm_manager) {
         RecoverCriteria criteria;
         criteria.transaction_id = transaction_id;
         criteria.use_timestamp = false;
-        frm_manager->recover(criteria);
+        // Note: This old method always UNDOs from disk, even if data is in buffer
+        // frm_manager->recover(criteria);
 
         // Log abort
         ExecutionResult log_entry;
