@@ -21,7 +21,19 @@ HashIndexEngine::HashIndexEngine() : data_dir_("data") {}
 
 HashIndexEngine::HashIndexEngine(const std::string& data_dir) : data_dir_(data_dir) {}
 
+// Generic update methods - auto-detect index type and call appropriate method
 void HashIndexEngine::update_index_after_insert(const std::string& table, const std::string& column, int64_t row_offset, const Row& row) {
+    // Check for B+ Tree index first
+    std::string bptfile = data_dir_ + "/" + table + "." + column + ".bpt";
+    if (std::filesystem::exists(bptfile)) {
+        update_bptree_after_insert(table, column, row_offset, row);
+        return;
+    }
+    
+    // Fallback to hash index
+    std::string hashfile = data_dir_ + "/" + table + "." + column + ".hashidx";
+    if (!std::filesystem::exists(hashfile)) return;
+    
     auto it = row.columns.find(column);
     if (it == row.columns.end()) return;
 
@@ -145,6 +157,14 @@ void HashIndexEngine::update_index_after_insert(const std::string& table, const 
 }
 
 void HashIndexEngine::update_index_after_update(const std::string& table, const std::string& column, int64_t row_offset, const Row& old_row, const Row& new_row){
+    // Check for B+ Tree index first
+    std::string bptfile = data_dir_ + "/" + table + "." + column + ".bpt";
+    if (std::filesystem::exists(bptfile)) {
+        update_bptree_after_update(table, column, row_offset, old_row, new_row);
+        return;
+    }
+    
+    // Fallback to hash index
     auto A = old_row.columns.at(column);
     auto B = new_row.columns.at(column);
 
@@ -161,6 +181,17 @@ void HashIndexEngine::update_index_after_update(const std::string& table, const 
 }
 
 void HashIndexEngine::update_index_after_delete(const std::string& table, const std::string& column, int64_t row_offset, const Row& old_row) {
+    // Check for B+ Tree index first
+    std::string bptfile = data_dir_ + "/" + table + "." + column + ".bpt";
+    if (std::filesystem::exists(bptfile)) {
+        update_bptree_after_delete(table, column, row_offset, old_row);
+        return;
+    }
+    
+    // Fallback to hash index
+    std::string hashfile = data_dir_ + "/" + table + "." + column + ".hashidx";
+    if (!std::filesystem::exists(hashfile)) return;
+    
     auto it = old_row.columns.find(column);
     if (it == old_row.columns.end()) return;
 
@@ -429,19 +460,22 @@ void HashIndexEngine::build_hash_index(const TableSchema& schema, const std::str
 
 bool HashIndexEngine::lookup_index(const std::string& table, const std::string& column, const std::any& operand, std::vector<int64_t>& out_offsets) {
     // Check which index file exists for the table.column
+    // Try B+ Tree first (better performance for range queries)
+    std::string bptfile = data_dir_ + "/" + table + "." + column + ".bpt";
+    std::ifstream btest(bptfile, std::ios::binary);
+    if (btest.is_open()) {
+        btest.close();
+        return lookup_bptree(table, column, operand, out_offsets);
+    }
+    
+    // Fallback to hash index
     std::string hashfile = data_dir_ + "/" + table + "." + column + ".hashidx";
     std::ifstream htest(hashfile, std::ios::binary);
     if (htest.is_open()) {
         htest.close();
         return lookup_hash(table, column, operand, out_offsets);
     }
-
-    std::string bptfile = data_dir_ + "/" + table + "." + column + ".bpt";
-    std::ifstream btest(bptfile, std::ios::binary);
-    if (btest.is_open()) {
-        btest.close();
-        // TO DO: return lookup for b+tree
-    }
+    
     return false; // no index
 }
 

@@ -732,6 +732,11 @@ bool StorageEngine::check_and_update_tables_metadata(const TableSchema& schema) 
 }
 
 bool StorageEngine::delete_table(const TableSchema& schema) {
+    // CRITICAL: Evict all pages for this table from buffer first WITHOUT flushing
+    // This prevents flush errors and discards any uncommitted changes
+    std::cout << "SM: Evicting table " << schema.table_name << " from buffer..." << std::endl;
+    buffer_manager_.evict_table_without_flush(schema.table_name);
+    
     std::string schema_filename = data_dir_ + "/" + schema.table_name + ".schema";
     std::string data_filename = data_dir_ + "/" + schema.table_name + ".dat";
     std::string tables_in_filename = data_dir_ + "/tables.meta";
@@ -811,22 +816,51 @@ bool StorageEngine::delete_table(const TableSchema& schema) {
     tables_infile.close();
     tables_outfile.close();
 
-    // delete table data dan schema
-    if (std::remove(schema_filename.c_str()) != 0) {
-        std::perror("SM: Error deleting schema file when deleting table");
-        throw std::runtime_error("SM: Error deleting schema file when deleting tabl");
+    // Delete table data and schema files
+    // Note: Files might not exist if table was only in buffer (newly created)
+    if (std::filesystem::exists(schema_filename)) {
+        if (std::remove(schema_filename.c_str()) != 0) {
+            std::perror("SM: Error deleting schema file");
+            throw std::runtime_error("SM: Error deleting schema file");
+        }
+        std::cout << "SM: Deleted schema file: " << schema.table_name << ".schema" << std::endl;
+    } else {
+        std::cout << "SM: Schema file not found (table was only in buffer)" << std::endl;
     }
-    if (std::remove(data_filename.c_str()) != 0) {
-        std::perror("SM: Error deleting data file when deleting table");
-        throw std::runtime_error("SM: Error deleting data file when deleting table");
+    
+    if (std::filesystem::exists(data_filename)) {
+        if (std::remove(data_filename.c_str()) != 0) {
+            std::perror("SM: Error deleting data file");
+            throw std::runtime_error("SM: Error deleting data file");
+        }
+        std::cout << "SM: Deleted data file: " << schema.table_name << ".dat" << std::endl;
+    } else {
+        std::cout << "SM: Data file not found (table was only in buffer)" << std::endl;
     }
+    
     if (std::remove(tables_in_filename.c_str()) != 0) {
-        std::perror("SM: Error deleting data file when deleting old tables.meta");
-        throw std::runtime_error("SM: Error deleting data file when deleting old tables.meta");
+        std::perror("SM: Error deleting old tables.meta");
+        throw std::runtime_error("SM: Error deleting old tables.meta");
     }
 
-    // delete index file
-    // eh ngawur cuks masih aneh hash index
+    // Delete all index files for this table (.idx for hash, .bpt for B+ tree)
+    try {
+        for (const auto& entry : std::filesystem::directory_iterator(data_dir_)) {
+            if (entry.is_regular_file()) {
+                std::string filename = entry.path().filename().string();
+                // Check if file starts with table name and has index extension
+                if (filename.find(schema.table_name + ".") == 0 && 
+                    (filename.ends_with(".idx") || filename.ends_with(".bpt"))) {
+                    std::filesystem::remove(entry.path());
+                    std::cout << "SM: Deleted index file: " << filename << std::endl;
+                }
+            }
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "SM: Warning - error deleting index files: " << e.what() << std::endl;
+        // Non-fatal, continue
+    }
+
     std::rename(tables_out_filename.c_str(), tables_in_filename.c_str());
     return result;
 }
@@ -1209,10 +1243,12 @@ void StorageEngine::set_index(const std::string& table, const std::string& colum
     }
 
     if (index_type == IndexType::HASH) {
+        std::cout << "SM: Building HASH index for " << table << "." << column << std::endl;
         hash_index_engine.build_hash_index(schema, table, column);
-    } else {
-        // TODO: call b+tree here
-    };
+    } else if (index_type == IndexType::BTREE) {
+        std::cout << "SM: Building B+ Tree index for " << table << "." << column << std::endl;
+        hash_index_engine.build_bptree_index(schema, table, column);
+    }
 }
 
 std::string StorageEngine::to_string_any(const std::any& a) {

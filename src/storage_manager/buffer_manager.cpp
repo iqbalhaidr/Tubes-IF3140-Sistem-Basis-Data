@@ -220,6 +220,33 @@ void BufferManager::flush_page(const std::string& table_name, int page_id) {
     }
 }
 
+void BufferManager::evict_table_without_flush(const std::string& table_name) {
+    std::cout << "BufferManager: Evicting all pages for table " << table_name 
+              << " from buffer (without flush)..." << std::endl;
+    
+    int evicted_count = 0;
+    int dirty_discarded = 0;
+    
+    // Remove all pages for this table from buffer pool WITHOUT flushing
+    for (auto it = buffer_pool_.begin(); it != buffer_pool_.end(); ) {
+        if (it->first.first == table_name) {
+            if (it->second.is_dirty) {
+                dirty_discarded++;
+            }
+            it = buffer_pool_.erase(it);
+            evicted_count++;
+        } else {
+            ++it;
+        }
+    }
+    
+    // Remove schema from cache
+    schema_cache_.erase(table_name);
+    
+    std::cout << "BufferManager: Evicted " << evicted_count << " pages for table " 
+              << table_name << " (" << dirty_discarded << " dirty pages discarded)" << std::endl;
+}
+
 void BufferManager::checkpoint() {
     std::cout << "BufferManager: Performing checkpoint..." << std::endl;
     
