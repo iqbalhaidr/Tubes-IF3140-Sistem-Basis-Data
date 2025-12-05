@@ -92,6 +92,7 @@ namespace mdbms::qo {
         int estimated_cost;
 
         std::vector<std::string> select_columns;
+        std::vector<std::string> select_aliases;
         std::vector<std::string> from_tables;
         std::vector<TableReference> table_references;
         std::map<std::string, std::string> table_aliases;

@@ -222,7 +222,59 @@ Rows<Row> QueryProcessor::execute_select(const mdbms::qo::ParsedQuery& parsed_qu
             joined_data = apply_limit(joined_data, parsed_query.limit_value);
         }
 
-        result = joined_data;
+        if (!parsed_query.select_aliases.empty()) {
+            bool is_select_all = false;
+            if (parsed_query.select_columns.size() == 1 && parsed_query.select_columns[0] == "*") {
+                is_select_all = true;
+            }
+
+            if (is_select_all) {
+                result = joined_data;
+            } else {
+                Rows<Row> projected_data;
+                projected_data.column_names = parsed_query.select_aliases;
+                
+                for (const auto& row : joined_data.data) {
+                    Row new_row;
+                    new_row.row_id = row.row_id;
+                    new_row.table_name = row.table_name;
+                    
+                    for (size_t i = 0; i < parsed_query.select_columns.size(); ++i) {
+                        if (i >= parsed_query.select_aliases.size()) break;
+
+                        std::string source_col = parsed_query.select_columns[i];
+                        std::string target_alias = parsed_query.select_aliases[i];
+                        
+                        bool found = false;
+                        
+                        if (row.columns.count(source_col)) {
+                            new_row.columns[target_alias] = row.columns.at(source_col);
+                            found = true;
+                        }
+                        else {
+                            for (const auto& [key, val] : row.columns) {
+                                if (key.size() > source_col.size() && 
+                                    key.substr(key.size() - source_col.size()) == source_col &&
+                                    key[key.size() - source_col.size() - 1] == '.') {
+                                    new_row.columns[target_alias] = val;
+                                    found = true;
+                                    break;
+                                }
+                            }
+                        }
+
+                        if (!found) {
+                            std::cerr << "QP: Warning: Column '" << source_col << "' not found for alias '" << target_alias << "'" << std::endl;
+                        }
+                    }
+                    projected_data.data.push_back(new_row);
+                }
+                projected_data.rows_count = static_cast<int>(projected_data.data.size());
+                result = projected_data;
+            }
+        } else {
+             result = joined_data;
+        }
 
     } catch (const std::exception& e) {
         std::cerr << "QP SELECT error: " << e.what() << std::endl;
