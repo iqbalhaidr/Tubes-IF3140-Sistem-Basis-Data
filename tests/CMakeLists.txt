@@ -16,9 +16,9 @@ target_link_libraries(test_integration
     PRIVATE
     qp_lib
     qo_lib
-    sm_lib
     ccm_lib
     fr_lib
+    sm_lib
 )
 target_include_directories(test_integration PRIVATE ${PROJECT_SOURCE_DIR}/include)
 
@@ -35,8 +35,8 @@ target_link_libraries(test_multithreaded_cc_fr
     PRIVATE
     qp_lib
     qo_lib
-    sm_lib
     ccm_lib
     fr_lib
+    sm_lib
 )
 target_include_directories(test_multithreaded_cc_fr PRIVATE ${PROJECT_SOURCE_DIR}/include)
