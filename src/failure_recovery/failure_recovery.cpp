@@ -233,7 +233,13 @@ void FailureRecoveryManager::commit_transaction(int transaction_id) {
 }
 
 void FailureRecoveryManager::abort_transaction(int transaction_id) {
-    std::lock_guard<std::mutex> lock(this->mtx);
+    {
+        std::lock_guard<std::mutex> lock(this->mtx);
+        if (!active_transactions_cache.count(transaction_id)) {
+            std::cout << "FRM: Transaction " << transaction_id << " already finished/unknown, skipping abort." << std::endl;
+            return;
+        }
+    }
 
     std::cout << "FRM: Aborting transaction " << transaction_id << "..." << std::endl;
     
@@ -250,6 +256,7 @@ void FailureRecoveryManager::abort_transaction(int transaction_id) {
     recover(criteria);
     
     // tulis abort log entry ke buffer
+    std::lock_guard<std::mutex> lock(this->mtx);
     LogEntry abort_entry;
     abort_entry.log_id = this->next_log_id++;
     abort_entry.transaction_id = transaction_id;

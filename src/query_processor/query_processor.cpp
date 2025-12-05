@@ -3,6 +3,7 @@
 #include <iostream>
 #include <sstream>
 #include <utility>
+#include <unordered_map>
 #include "concurrency_control.h"
 #include "failure_recovery.h"
 #include "query_optimizer.h"
@@ -709,6 +710,11 @@ int QueryProcessor::execute_insert(const mdbms::qo::ParsedQuery& parsed_query, i
         } catch (const std::runtime_error& e) {
             throw std::runtime_error("Table '" + table_name + "' does not exist");
         }
+        TableSchema schema = mdbms::sm::StorageEngine::get_instance().get_table_schema(table_name);
+        std::unordered_map<std::string, DataType> column_type_map;
+        for (size_t i = 0; i < schema.column_names.size(); ++i) {
+            column_type_map[schema.column_names[i]] = schema.column_types[i];
+        }
 
         // Request WRITE access from CCM
         {
@@ -773,7 +779,26 @@ int QueryProcessor::execute_insert(const mdbms::qo::ParsedQuery& parsed_query, i
         for (size_t i = 0; i < parsed_query.insert_values.size() && i < column_names.size(); ++i) {
             std::string col_name = column_names[i];
             std::cout << "[DEBUG] QP INSERT: Mapping value[" << i << "] to column: " << col_name << std::endl;
-            single_insert.new_value.columns[col_name] = parsed_query.insert_values[i];
+            std::any mapped_value = parsed_query.insert_values[i];
+
+            auto type_it = column_type_map.find(col_name);
+            if (type_it != column_type_map.end()) {
+                if (type_it->second == DataType::FLOAT) {
+                    if (mapped_value.type() == typeid(double)) {
+                        mapped_value = static_cast<float>(std::any_cast<double>(mapped_value));
+                    } else if (mapped_value.type() == typeid(int)) {
+                        mapped_value = static_cast<float>(std::any_cast<int>(mapped_value));
+                    }
+                } else if (type_it->second == DataType::INTEGER) {
+                    if (mapped_value.type() == typeid(double)) {
+                        mapped_value = static_cast<int>(std::any_cast<double>(mapped_value));
+                    } else if (mapped_value.type() == typeid(float)) {
+                        mapped_value = static_cast<int>(std::any_cast<float>(mapped_value));
+                    }
+                }
+            }
+
+            single_insert.new_value.columns[col_name] = mapped_value;
             single_insert.columns.push_back(col_name);
         }
         

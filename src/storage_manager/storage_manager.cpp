@@ -243,27 +243,20 @@ int StorageEngine::write_block(const DataWrite<Row>& write) {
         std::cout << "[DEBUG] SM write_block: INSERT using buffer..." << std::endl;
 
         // Determine number of existing pages
-        int num_pages = 0;
-        if (std::filesystem::exists(filename)) {
-            auto file_size = std::filesystem::file_size(filename);
-            num_pages = static_cast<int>((file_size + PAGE_SIZE - 1) / PAGE_SIZE);
-        }
-
-        // Try to add to last page first
+        // Choose last page considering both buffer and disk so inserts stay contiguous
+        int target_page_id = buffer_manager_.get_max_page_id(write.table);
         BufferPage* page = nullptr;
-        int target_page_id = -1;
 
-        if (num_pages > 0) {
-            target_page_id = num_pages - 1;
+        if (target_page_id >= 0) {
             page = buffer_manager_.get_page(write.table, target_page_id, schema);
-            
+
             // Check if row fits in this page
             size_t current_size = 0;
             for (const auto& row : page->rows) {
                 current_size += estimate_row_size(row, schema);
             }
             size_t new_row_size = estimate_row_size(write.new_value, schema);
-            
+
             if (current_size + new_row_size > PAGE_SIZE) {
                 // Page is full, need new page
                 buffer_manager_.unpin_page(write.table, target_page_id, false);
@@ -271,7 +264,7 @@ int StorageEngine::write_block(const DataWrite<Row>& write) {
                 target_page_id = page->page_id;
             }
         } else {
-            // No pages yet, create first page
+            // No pages yet anywhere, create first page
             page = buffer_manager_.new_page(write.table);
             target_page_id = page->page_id;
         }
