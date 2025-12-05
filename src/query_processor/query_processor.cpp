@@ -177,15 +177,11 @@ Rows<Row> QueryProcessor::execute_select(const mdbms::qo::ParsedQuery& parsed_qu
             // For SELECT, we need READ permission on all rows
 
             // Read data from storage
-<<<<<<< HEAD
             Rows<Row> table_rows = mdbms::sm::StorageEngine::get_instance().read_block(retrieval);
-=======
-            Rows<Row> table_rows = sm_engine->read_block(retrieval);
             if (!parsed_query.table_aliases.empty()) {
                 table_rows = apply_table_aliases(table_rows, table_name, parsed_query.table_aliases);
             }
             
->>>>>>> origin/feat/qp/implement-as-clause
             table_data.push_back(table_rows);
             table_names_processed.push_back(table_name);
 
