@@ -133,6 +133,7 @@ Rows<Row> QueryProcessor::execute_select(const mdbms::qo::ParsedQuery& parsed_qu
 
     try {
         std::vector<Rows<Row>> table_data;
+        std::vector<std::string> table_names_processed;
 
         for (const auto& table_name : parsed_query.from_tables) {
             try {
@@ -143,7 +144,12 @@ Rows<Row> QueryProcessor::execute_select(const mdbms::qo::ParsedQuery& parsed_qu
 
             DataRetrieval retrieval;
             retrieval.table = table_name;
-            retrieval.columns = parsed_query.select_columns;
+            
+            std::vector<std::string> resolved_columns;
+            for (const auto& col : parsed_query.select_columns) {
+                resolved_columns.push_back(resolve_aliased_column(col, parsed_query.table_aliases));
+            }
+            retrieval.columns = resolved_columns;
             retrieval.search_type = SearchType::LINEAR;
 
             {
@@ -171,8 +177,17 @@ Rows<Row> QueryProcessor::execute_select(const mdbms::qo::ParsedQuery& parsed_qu
             // For SELECT, we need READ permission on all rows
 
             // Read data from storage
+<<<<<<< HEAD
             Rows<Row> table_rows = mdbms::sm::StorageEngine::get_instance().read_block(retrieval);
+=======
+            Rows<Row> table_rows = sm_engine->read_block(retrieval);
+            if (!parsed_query.table_aliases.empty()) {
+                table_rows = apply_table_aliases(table_rows, table_name, parsed_query.table_aliases);
+            }
+            
+>>>>>>> origin/feat/qp/implement-as-clause
             table_data.push_back(table_rows);
+            table_names_processed.push_back(table_name);
 
             std::cout << "QP Retrieved " << table_rows.rows_count << " rows from " << table_name << std::endl;
         }
@@ -228,12 +243,34 @@ Rows<Row> QueryProcessor::apply_where_clause(const Rows<Row>& rows, const std::v
         bool matches_all = true;
 
         for (const auto& cond : conditions) {
+            std::string actual_column = cond.column;
+            
             if (row.columns.find(cond.column) == row.columns.end()) {
-                matches_all = false;
-                break;
+                bool found = false;
+                for (const auto& col_pair : row.columns) {
+                    if (col_pair.first.size() >= cond.column.size()) {
+                        size_t suffix_start = col_pair.first.size() - cond.column.size();
+                        if (col_pair.first.substr(suffix_start) == cond.column) {
+                            if (suffix_start == 0 || col_pair.first[suffix_start - 1] == '.') {
+                                actual_column = col_pair.first;
+                                found = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (col_pair.first == cond.column) {
+                        actual_column = col_pair.first;
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    matches_all = false;
+                    break;
+                }
             }
 
-            const std::any& value = row.columns.at(cond.column);
+            const std::any& value = row.columns.at(actual_column);
             bool condition_met = false;
 
             try {
@@ -1115,6 +1152,71 @@ std::string QueryProcessor::parse_query_type(const std::string& query) {
     std::transform(first_word.begin(), first_word.end(), first_word.begin(), ::toupper);
 
     return first_word;
+}
+
+std::string QueryProcessor::resolve_aliased_column(const std::string& column, 
+                                                    const std::map<std::string, std::string>& table_aliases) {
+    size_t dot_pos = column.find('.');
+    if (dot_pos != std::string::npos) {
+        std::string prefix = column.substr(0, dot_pos);
+        std::string col_name = column.substr(dot_pos + 1);
+        
+        if (table_aliases.find(prefix) != table_aliases.end()) {
+            return col_name;  // Return just the column name
+        }
+    }
+    return column;  // Return original if no alias prefix
+}
+
+std::string QueryProcessor::get_table_from_alias(const std::string& alias,
+                                                  const std::map<std::string, std::string>& table_aliases) {
+    auto it = table_aliases.find(alias);
+    if (it != table_aliases.end()) {
+        return it->second;  // Return actual table name
+    }
+    return alias;  // Return original if not an alias
+}
+
+Rows<Row> QueryProcessor::apply_table_aliases(const Rows<Row>& rows, const std::string& table_name,
+                                               const std::map<std::string, std::string>& table_aliases) {
+    Rows<Row> result;
+    
+    // Find the alias for this table (if any)
+    std::string alias = "";
+    for (const auto& pair : table_aliases) {
+        if (pair.second == table_name) {
+            alias = pair.first;
+            break;
+        }
+    }
+    
+    // If alias is same as table name, no aliasing needed
+    if (alias.empty() || alias == table_name) {
+        return rows;
+    }
+    
+    // Create new column names with alias prefix
+    for (const auto& col : rows.column_names) {
+        // Add alias prefix to column names (e.g., "StudentID" -> "s.StudentID")
+        result.column_names.push_back(alias + "." + col);
+    }
+    
+    // Copy rows with aliased column names
+    for (const auto& row : rows.data) {
+        Row new_row;
+        new_row.row_id = row.row_id;
+        new_row.table_name = row.table_name;
+        
+        for (const auto& col_pair : row.columns) {
+            std::string aliased_col = alias + "." + col_pair.first;
+            new_row.columns[aliased_col] = col_pair.second;
+        }
+        
+        result.data.push_back(new_row);
+    }
+    
+    result.rows_count = result.data.size();
+    return result;
 }
 
 } // namespace mdbms::qp

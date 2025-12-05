@@ -1493,13 +1493,128 @@ bool test_natural_join() {
     return true;
 }
 
+bool test_table_alias_basic() {
+    std::cout << "\n=== TEST 26: Table Alias Basic (AS clause) ===" << std::endl;
+
+    TestSetup setup("qp_test_table_alias_basic");
+    setup.insert_student(1, "Alice", 3.8f);
+    setup.insert_student(2, "Bob", 3.0f);
+    setup.insert_student(3, "Charlie", 3.5f);
+
+    // Create ParsedQuery for SELECT * FROM Student AS s
+    mdbms::qo::ParsedQuery select_query;
+    select_query.query_type = "SELECT";
+    select_query.select_columns = {"*"};
+    select_query.from_tables.push_back("Student");
+    
+    // Add table alias: s -> Student
+    select_query.table_aliases["s"] = "Student";
+
+    int txn_id = setup.qp->begin_transaction();
+    auto result = setup.qp->execute_select(select_query, txn_id);
+
+    std::cout << "Result - SELECT * FROM Student AS s:" << std::endl;
+    print_rows(result);
+
+    if (result.rows_count != 3) {
+        std::cerr << "[FAIL] Expected 3 rows, got " << result.rows_count << "\n";
+        return false;
+    }
+
+    // Check that column names are aliased (e.g., s.StudentID)
+    bool has_aliased_columns = false;
+    for (const auto& col : result.column_names) {
+        if (col.find("s.") == 0) {
+            has_aliased_columns = true;
+            break;
+        }
+    }
+
+    if (!has_aliased_columns) {
+        std::cerr << "[FAIL] Column names should be aliased with 's.' prefix\n";
+        return false;
+    }
+
+    std::cout << "[PASS] Table Alias Basic test\n";
+    return true;
+}
+
+bool test_table_alias_with_where() {
+    std::cout << "\n=== TEST 27: Table Alias with WHERE (AS clause) ===" << std::endl;
+
+    TestSetup setup("qp_test_table_alias_where");
+    setup.insert_student(1, "Alice", 3.8f);
+    setup.insert_student(2, "Bob", 3.0f);
+    setup.insert_student(3, "Charlie", 3.5f);
+    setup.insert_student(4, "Diana", 2.5f);
+
+    // Create ParsedQuery for SELECT * FROM Student AS s WHERE GPA > 3.0
+    mdbms::qo::ParsedQuery select_query;
+    select_query.query_type = "SELECT";
+    select_query.select_columns = {"*"};
+    select_query.from_tables.push_back("Student");
+    
+    // Add table alias: s -> Student
+    select_query.table_aliases["s"] = "Student";
+    
+    // WHERE clause with unaliased column name (should still work)
+    select_query.where_conditions.push_back(mdbms::Condition("GPA", ">", 3.0f));
+
+    int txn_id = setup.qp->begin_transaction();
+    auto result = setup.qp->execute_select(select_query, txn_id);
+
+    std::cout << "Result - SELECT * FROM Student AS s WHERE GPA > 3.0:" << std::endl;
+    print_rows(result);
+
+    // Should get: Alice (3.8), Charlie (3.5) = 2 rows
+    if (result.rows_count != 2) {
+        std::cerr << "[FAIL] Expected 2 rows, got " << result.rows_count << "\n";
+        return false;
+    }
+
+    std::cout << "[PASS] Table Alias with WHERE test\n";
+    return true;
+}
+
+bool test_table_alias_with_aliased_column_ref() {
+    std::cout << "\n=== TEST 28: Table Alias with Aliased Column Reference ===" << std::endl;
+
+    TestSetup setup("qp_test_table_alias_col_ref");
+    setup.insert_student(1, "Alice", 3.8f);
+    setup.insert_student(2, "Bob", 3.0f);
+    setup.insert_student(3, "Charlie", 3.5f);
+
+    // Create ParsedQuery for SELECT s.FullName FROM Student AS s
+    mdbms::qo::ParsedQuery select_query;
+    select_query.query_type = "SELECT";
+    select_query.select_columns = {"s.FullName"};
+    select_query.from_tables.push_back("Student");
+    
+    // Add table alias: s -> Student
+    select_query.table_aliases["s"] = "Student";
+
+    int txn_id = setup.qp->begin_transaction();
+    auto result = setup.qp->execute_select(select_query, txn_id);
+
+    std::cout << "Result - SELECT s.FullName FROM Student AS s:" << std::endl;
+    print_rows(result);
+
+    if (result.rows_count != 3) {
+        std::cerr << "[FAIL] Expected 3 rows, got " << result.rows_count << "\n";
+        return false;
+    }
+
+    std::cout << "[PASS] Table Alias with Aliased Column Reference test\n";
+    return true;
+}
+
 int main() {
     std::cout << "===================================" << std::endl;
     std::cout << "  Query Processor Tests" << std::endl;
     std::cout << "===================================" << std::endl;
 
     int passed = 0;
-    int total = 25;
+    int total = 28;
 
     if (test_basic_integration()) passed++;
     if (test_begin_transaction()) passed++;
@@ -1526,6 +1641,9 @@ int main() {
     if (test_update_multiple_rows()) passed++;
     if (test_update_with_string_condition()) passed++;
     if (test_natural_join()) passed++;
+    if (test_table_alias_basic()) passed++;
+    if (test_table_alias_with_where()) passed++;
+    if (test_table_alias_with_aliased_column_ref()) passed++;
 
     std::cout << "\n========================================" << std::endl;
     std::cout << "  Results: " << passed << "/" << total << " tests passed" << std::endl;
