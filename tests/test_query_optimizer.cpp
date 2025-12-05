@@ -9,46 +9,46 @@
 #include <unordered_map>
 #include <vector>
 
-namespace mdbms::sm {
-StorageEngine::StorageEngine() = default;
-StorageEngine::StorageEngine(const std::string& /*data_dir*/) {}
+// namespace mdbms::sm {
+// StorageEngine::StorageEngine() = default;
+// StorageEngine::StorageEngine(const std::string& /*data_dir*/) {}
 
-std::map<std::string, Statistic> StorageEngine::get_stats() {
-    std::map<std::string, Statistic> stats;
+// std::map<std::string, Statistic> StorageEngine::get_stats() {
+//     std::map<std::string, Statistic> stats;
 
-    stats["student"] = [] {
-        Statistic s;
-        s.table_name = "student";
-        s.n_r = 1000;
-        s.b_r = 20;
-        s.f_r = 50;
-        s.V_a_r = {{"id", 1000}, {"dept_id", 10}, {"apt_id", 50}, {"age", 60}};
-        return s;
-    }();
+//     stats["student"] = [] {
+//         Statistic s;
+//         s.table_name = "student";
+//         s.n_r = 1000;
+//         s.b_r = 20;
+//         s.f_r = 50;
+//         s.V_a_r = {{"id", 1000}, {"dept_id", 10}, {"apt_id", 50}, {"age", 60}};
+//         return s;
+//     }();
 
-    stats["dept"] = [] {
-        Statistic s;
-        s.table_name = "dept";
-        s.n_r = 10;
-        s.b_r = 2;
-        s.f_r = 30;
-        s.V_a_r = {{"id", 10}, {"size", 10}, {"location", 3}, {"nama", 10}};
-        return s;
-    }();
+//     stats["dept"] = [] {
+//         Statistic s;
+//         s.table_name = "dept";
+//         s.n_r = 10;
+//         s.b_r = 2;
+//         s.f_r = 30;
+//         s.V_a_r = {{"id", 10}, {"size", 10}, {"location", 3}, {"nama", 10}};
+//         return s;
+//     }();
 
-    stats["apt"] = [] {
-        Statistic s;
-        s.table_name = "apt";
-        s.n_r = 50;
-        s.b_r = 5;
-        s.f_r = 40;
-        s.V_a_r = {{"id", 50}, {"name", 50}, {"type", 5}, {"active", 2}};
-        return s;
-    }();
+//     stats["apt"] = [] {
+//         Statistic s;
+//         s.table_name = "apt";
+//         s.n_r = 50;
+//         s.b_r = 5;
+//         s.f_r = 40;
+//         s.V_a_r = {{"id", 50}, {"name", 50}, {"type", 5}, {"active", 2}};
+//         return s;
+//     }();
 
-    return stats;
-}
-}  // namespace mdbms::sm
+//     return stats;
+// }
+// }  // namespace mdbms::sm
 
 namespace {
 
@@ -224,7 +224,7 @@ void print_query_analysis(const QueryDebugCase& debug_case) {
     std::cout << "\n=== " << debug_case.name << " ===\n";
     std::cout << "Original Query:\n  " << debug_case.sql << "\n\n";
 
-    mdbms::qo::OptimizationEngine opt;
+    auto& opt = mdbms::qo::OptimizationEngine::get_instance();
     mdbms::qo::ParsedQuery parsed = opt.parse_query(debug_case.sql);
     print_parsed_summary(parsed);
 
@@ -240,7 +240,7 @@ void print_query_analysis(const QueryDebugCase& debug_case) {
     std::cout << "\nInitial Query Tree:\n";
     print_tree(parsed.query_tree);
 
-    mdbms::sm::StorageEngine storage;
+    auto& storage = mdbms::sm::StorageEngine::get_instance();
     const int initial_cost = mdbms::qo::estimate_cost(*parsed.query_tree, &storage);
     std::cout << "Initial cost estimate: " << initial_cost << "\n\n";
 
@@ -258,7 +258,7 @@ void print_query_analysis(const QueryDebugCase& debug_case) {
 
 bool test_select_parsing() {
     std::cout << "\n[TEST] SELECT parsing with JOIN, NATURAL, ORDER BY, LIMIT\n";
-    mdbms::qo::OptimizationEngine opt;
+    auto& opt = mdbms::qo::OptimizationEngine::get_instance();
     const std::string query =
         "SELECT s.name, d.nama, a.type FROM student AS s INNER JOIN dept d ON s.dept_id = d.id "
         "NATURAL JOIN apt a WHERE s.age > 20 AND d.size >= 10 ORDER BY s.name DESC LIMIT 5;";
@@ -292,7 +292,7 @@ bool test_select_parsing() {
 
 bool test_update_parsing() {
     std::cout << "\n[TEST] UPDATE parsing\n";
-    mdbms::qo::OptimizationEngine opt;
+    auto& opt = mdbms::qo::OptimizationEngine::get_instance();
     const std::string query =
         "UPDATE employee SET salary = 1000, name = 'Grace' WHERE id = 7;";
 
@@ -313,7 +313,7 @@ bool test_update_parsing() {
 
 bool test_insert_parsing() {
     std::cout << "\n[TEST] INSERT parsing\n";
-    mdbms::qo::OptimizationEngine opt;
+    auto& opt = mdbms::qo::OptimizationEngine::get_instance();
     const std::string query =
         "INSERT INTO employee (id, name, salary) VALUES (1, \"Alice\", 1200.5);";
 
@@ -334,7 +334,7 @@ bool test_insert_parsing() {
 
 bool test_delete_parsing() {
     std::cout << "\n[TEST] DELETE parsing\n";
-    mdbms::qo::OptimizationEngine opt;
+    auto& opt = mdbms::qo::OptimizationEngine::get_instance();
     const std::string query = "DELETE FROM employee WHERE department = \"RnD\";";
 
     mdbms::qo::ParsedQuery parsed = opt.parse_query(query);
@@ -352,7 +352,7 @@ bool test_delete_parsing() {
 
 bool test_transaction_control_parsing() {
     std::cout << "\n[TEST] Transaction control parsing\n";
-    mdbms::qo::OptimizationEngine opt;
+    auto& opt = mdbms::qo::OptimizationEngine::get_instance();
     const std::vector<std::pair<std::string, std::string>> cases = {
         {"BEGIN TRANSACTION;", "BEGIN"},
         {"COMMIT;", "COMMIT"},
@@ -381,7 +381,7 @@ bool test_transaction_control_parsing() {
 
 bool test_create_table_parsing() {
     std::cout << "\n[TEST] CREATE TABLE parsing\n";
-    mdbms::qo::OptimizationEngine opt;
+    auto& opt = mdbms::qo::OptimizationEngine::get_instance();
     const std::string query =
         "CREATE TABLE employee ("
         "id INTEGER PRIMARY KEY, "
@@ -411,7 +411,7 @@ bool test_create_table_parsing() {
 
 bool test_drop_table_parsing() {
     std::cout << "\n[TEST] DROP TABLE parsing\n";
-    mdbms::qo::OptimizationEngine opt;
+    auto& opt = mdbms::qo::OptimizationEngine::get_instance();
     const std::string query = "DROP TABLE obsolete_table;";
 
     mdbms::qo::ParsedQuery parsed = opt.parse_query(query);
@@ -424,7 +424,7 @@ bool test_drop_table_parsing() {
 
 bool test_query_tree_and_cost() {
     std::cout << "\n[TEST] Query tree construction and cost estimation\n";
-    mdbms::qo::OptimizationEngine opt;
+    auto& opt = mdbms::qo::OptimizationEngine::get_instance();
     const std::string query =
         "SELECT s.name, d.nama FROM student s JOIN dept d ON s.dept_id = d.id "
         "WHERE s.age > 20 AND d.size >= 5;";
@@ -435,7 +435,7 @@ bool test_query_tree_and_cost() {
     mdbms::qo::ParsedQuery optimized = opt.optimize_query(parsed);
     if (!expect(optimized.query_tree != nullptr, "Optimized query tree should not be null")) return false;
 
-    mdbms::sm::StorageEngine storage;
+    auto& storage = mdbms::sm::StorageEngine::get_instance();
     const int initial_cost = mdbms::qo::estimate_cost(*parsed.query_tree, &storage);
     const int optimized_cost = mdbms::qo::estimate_cost(*optimized.query_tree, &storage);
     if (!expect(initial_cost >= 0, "Initial cost should be computed")) return false;
@@ -447,10 +447,10 @@ bool test_query_tree_and_cost() {
 
 bool test_analyze_query_with_storage() {
     std::cout << "\n[TEST] Analyze query integrates parser and storage stats\n";
-    mdbms::qo::OptimizationEngine opt;
+    auto& opt = mdbms::qo::OptimizationEngine::get_instance();
     const std::string query = "SELECT name FROM student WHERE age > 21 LIMIT 5;";
 
-    mdbms::sm::StorageEngine storage;
+    auto& storage = mdbms::sm::StorageEngine::get_instance();
     mdbms::qo::ParsedQuery analyzed = opt.analyze_query(query, &storage);
 
     if (!expect(analyzed.query_tree != nullptr, "Analyzer should build a query tree")) return false;

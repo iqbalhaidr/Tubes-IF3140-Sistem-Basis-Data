@@ -12,12 +12,6 @@ namespace mdbms::qp {
 
 QueryProcessor::QueryProcessor()
     : current_transaction_id(-1), explicit_transaction_started(false) {
-    // All components are singletons, always use get_instance()
-    qo_engine = &mdbms::qo::OptimizationEngine::get_instance();
-    sm_engine = &mdbms::sm::StorageEngine::get_instance();
-    ccm_manager = &mdbms::ccm::ConcurrencyControlManager::get_instance();
-    frm_manager = &mdbms::fr::FailureRecoveryManager::get_instance();
-
     std::cout << "QP: Query Processor initialized" << std::endl;
 }
 
@@ -69,7 +63,8 @@ ExecutionResult QueryProcessor::execute_query(const std::string& query) {
         result.transaction_id = current_transaction_id;
 
         // Parse and optimize query using optimizer (with storage stats)
-        mdbms::qo::ParsedQuery optimized_query = qo_engine->analyze_query(query, sm_engine);
+        mdbms::qo::ParsedQuery optimized_query = mdbms::qo::OptimizationEngine::get_instance().analyze_query(
+            query, &mdbms::sm::StorageEngine::get_instance());
 
         // Execute based on query type
         if (query_type == "SELECT") {
@@ -109,12 +104,12 @@ ExecutionResult QueryProcessor::execute_query(const std::string& query) {
 
         // Log to Failure Recovery Manager
         if (result.success) {
-            frm_manager->write_log(result);
+            mdbms::fr::FailureRecoveryManager::get_instance().write_log(result);
         }
 
         // Auto-commit queries only if transaction was auto-started (not explicitly started with BEGIN)
-        if (ccm_manager && !explicit_transaction_started) {
-            ccm_manager->end_transaction(result.transaction_id);
+        if (!explicit_transaction_started) {
+            mdbms::ccm::ConcurrencyControlManager::get_instance().end_transaction(result.transaction_id);
             current_transaction_id = -1;
         }
 
@@ -141,7 +136,7 @@ Rows<Row> QueryProcessor::execute_select(const mdbms::qo::ParsedQuery& parsed_qu
 
         for (const auto& table_name : parsed_query.from_tables) {
             try {
-                sm_engine->get_table_schema(table_name);
+                mdbms::sm::StorageEngine::get_instance().get_table_schema(table_name);
             } catch (const std::runtime_error& e) {
                 throw std::runtime_error("Table '" + table_name + "' does not exist");
             }
@@ -151,12 +146,12 @@ Rows<Row> QueryProcessor::execute_select(const mdbms::qo::ParsedQuery& parsed_qu
             retrieval.columns = parsed_query.select_columns;
             retrieval.search_type = SearchType::LINEAR;
 
-            if (ccm_manager) {
+            {
                 Row request;
                 request.table_name = table_name;
                 request.row_id = -1;
-                ccm_manager->log_object(request, transaction_id);
-                Response access = ccm_manager->validate_object(request, transaction_id, Action::READ);
+                mdbms::ccm::ConcurrencyControlManager::get_instance().log_object(request, transaction_id);
+                Response access = mdbms::ccm::ConcurrencyControlManager::get_instance().validate_object(request, transaction_id, Action::READ);
                 if (!access.allowed) {
                     throw std::runtime_error("Concurrency control denied READ access for table " + table_name);
                 }
@@ -165,7 +160,7 @@ Rows<Row> QueryProcessor::execute_select(const mdbms::qo::ParsedQuery& parsed_qu
             // Check if table has index
             // if (!parsed_query.where_conditions.empty()) {
             //     const auto& first_condition = parsed_query.where_conditions[0];
-            //     if (sm_engine->has_index(table_name, first_condition.column)) {
+            //     if (mdbms::sm::StorageEngine::get_instance().has_index(table_name, first_condition.column)) {
             //         retrieval.search_type = SearchType::INDEX_SCAN;
             //         retrieval.index_column = first_condition.column;
             //     }
@@ -176,7 +171,7 @@ Rows<Row> QueryProcessor::execute_select(const mdbms::qo::ParsedQuery& parsed_qu
             // For SELECT, we need READ permission on all rows
 
             // Read data from storage
-            Rows<Row> table_rows = sm_engine->read_block(retrieval);
+            Rows<Row> table_rows = mdbms::sm::StorageEngine::get_instance().read_block(retrieval);
             table_data.push_back(table_rows);
 
             std::cout << "QP Retrieved " << table_rows.rows_count << " rows from " << table_name << std::endl;
@@ -581,18 +576,18 @@ int QueryProcessor::execute_update(const mdbms::qo::ParsedQuery& parsed_query, i
         std::string table_name = parsed_query.from_tables[0];
 
         try {
-            sm_engine->get_table_schema(table_name);
+            mdbms::sm::StorageEngine::get_instance().get_table_schema(table_name);
         } catch (const std::runtime_error& e) {
             throw std::runtime_error("Table '" + table_name + "' does not exist");
         }
 
-        // Request WRITE access ke CCM (nunggu integrasi ccm)
-        if (ccm_manager) {
+        // Request WRITE access ke CCM
+        {
             Row request;
             request.table_name = table_name;
             request.row_id = -1;
-            ccm_manager->log_object(request, transaction_id);
-            Response access = ccm_manager->validate_object(request, transaction_id, Action::WRITE);
+            mdbms::ccm::ConcurrencyControlManager::get_instance().log_object(request, transaction_id);
+            Response access = mdbms::ccm::ConcurrencyControlManager::get_instance().validate_object(request, transaction_id, Action::WRITE);
             if (!access.allowed) {
                 throw std::runtime_error("Concurrency control denied WRITE access for table " + table_name);
             }
@@ -602,7 +597,7 @@ int QueryProcessor::execute_update(const mdbms::qo::ParsedQuery& parsed_query, i
         retrieval.table = table_name;
         retrieval.columns = {"*"};
         retrieval.search_type = SearchType::LINEAR;
-        Rows<Row> all_rows = sm_engine->read_block(retrieval);
+        Rows<Row> all_rows = mdbms::sm::StorageEngine::get_instance().read_block(retrieval);
 
         Rows<Row> rows_to_update;
         if (!parsed_query.where_conditions.empty()) {
@@ -623,12 +618,12 @@ int QueryProcessor::execute_update(const mdbms::qo::ParsedQuery& parsed_query, i
             update_data.new_value.columns[col_name] = new_value;
         }
 
-        affected_rows = sm_engine->write_block(update_data);
+        affected_rows = mdbms::sm::StorageEngine::get_instance().write_block(update_data);
 
         std::cout << "QP: Updated " << affected_rows << " rows in " << table_name << std::endl;
 
         // Log to Failure Recovery Manager
-        if (frm_manager && affected_rows > 0) {
+        if (affected_rows > 0) {
             ExecutionResult log_result;
             log_result.transaction_id = transaction_id;
             log_result.timestamp = std::time(nullptr);
@@ -655,7 +650,7 @@ int QueryProcessor::execute_update(const mdbms::qo::ParsedQuery& parsed_query, i
             }
             log_result.data.rows_count = static_cast<int>(log_result.data.data.size());
             
-            frm_manager->write_log(log_result);
+            mdbms::fr::FailureRecoveryManager::get_instance().write_log(log_result);
         }
 
     } catch (const std::exception& e) {
@@ -677,18 +672,18 @@ int QueryProcessor::execute_insert(const mdbms::qo::ParsedQuery& parsed_query, i
         std::string table_name = parsed_query.from_tables[0];
 
         try {
-            sm_engine->get_table_schema(table_name);
+            mdbms::sm::StorageEngine::get_instance().get_table_schema(table_name);
         } catch (const std::runtime_error& e) {
             throw std::runtime_error("Table '" + table_name + "' does not exist");
         }
 
         // Request WRITE access from CCM
-        if (ccm_manager) {
+        {
             Row request;
             request.table_name = table_name;
             request.row_id = -1;
-            ccm_manager->log_object(request, transaction_id);
-            Response access = ccm_manager->validate_object(request, transaction_id, Action::WRITE);
+            mdbms::ccm::ConcurrencyControlManager::get_instance().log_object(request, transaction_id);
+            Response access = mdbms::ccm::ConcurrencyControlManager::get_instance().validate_object(request, transaction_id, Action::WRITE);
             if (!access.allowed) {
                 throw std::runtime_error("Concurrency control denied WRITE access for table " + table_name);
             }
@@ -708,7 +703,7 @@ int QueryProcessor::execute_insert(const mdbms::qo::ParsedQuery& parsed_query, i
         } else {
             // Get column names from schema (in correct order)
             std::cout << "[DEBUG] QP INSERT: No explicit columns, getting column names from schema..." << std::endl;
-            column_names = sm_engine->get_column_names(table_name);
+            column_names = mdbms::sm::StorageEngine::get_instance().get_column_names(table_name);
             
             if (column_names.empty()) {
                 std::cerr << "[DEBUG] QP INSERT ERROR: Cannot determine column names for table: " << table_name << std::endl;
@@ -774,13 +769,13 @@ int QueryProcessor::execute_insert(const mdbms::qo::ParsedQuery& parsed_query, i
         }
         std::cout << std::endl;
 
-        int res = sm_engine->write_block(single_insert);
+        int res = mdbms::sm::StorageEngine::get_instance().write_block(single_insert);
         if (res > 0) affected_rows = res;
 
         std::cout << "QP: Inserted " << affected_rows << " rows into " << table_name << std::endl;
 
         // Log to FRM
-        if (frm_manager && affected_rows > 0) {
+        if (affected_rows > 0) {
              ExecutionResult log_result;
             log_result.transaction_id = transaction_id;
             log_result.timestamp = std::time(nullptr);
@@ -799,7 +794,7 @@ int QueryProcessor::execute_insert(const mdbms::qo::ParsedQuery& parsed_query, i
             inserted_data.rows_count = 1;
             log_result.data = inserted_data;
 
-            frm_manager->write_log(log_result);
+            mdbms::fr::FailureRecoveryManager::get_instance().write_log(log_result);
         }
 
     } catch (const std::exception& e) {
@@ -821,18 +816,18 @@ int QueryProcessor::execute_delete(const mdbms::qo::ParsedQuery& parsed_query, i
         std::string table_name = parsed_query.from_tables[0];
 
         try {
-            sm_engine->get_table_schema(table_name);
+            mdbms::sm::StorageEngine::get_instance().get_table_schema(table_name);
         } catch (const std::runtime_error& e) {
             throw std::runtime_error("Table '" + table_name + "' does not exist");
         }
 
         // Request WRITE access
-        if (ccm_manager) {
+        {
             Row request;
             request.table_name = table_name;
             request.row_id = -1; 
-            ccm_manager->log_object(request, transaction_id);
-            Response access = ccm_manager->validate_object(request, transaction_id, Action::WRITE);
+            mdbms::ccm::ConcurrencyControlManager::get_instance().log_object(request, transaction_id);
+            Response access = mdbms::ccm::ConcurrencyControlManager::get_instance().validate_object(request, transaction_id, Action::WRITE);
             if (!access.allowed) {
                 throw std::runtime_error("Concurrency control denied WRITE access for table " + table_name);
             }
@@ -843,7 +838,7 @@ int QueryProcessor::execute_delete(const mdbms::qo::ParsedQuery& parsed_query, i
         retrieval.table = table_name;
         retrieval.columns = {"*"};
         retrieval.search_type = SearchType::LINEAR;
-        Rows<Row> all_rows = sm_engine->read_block(retrieval);
+        Rows<Row> all_rows = mdbms::sm::StorageEngine::get_instance().read_block(retrieval);
 
         Rows<Row> rows_to_delete;
         if (!parsed_query.where_conditions.empty()) {
@@ -858,12 +853,12 @@ int QueryProcessor::execute_delete(const mdbms::qo::ParsedQuery& parsed_query, i
         deletion.table = table_name;
         deletion.conditions = parsed_query.where_conditions;
 
-        affected_rows = sm_engine->delete_block(deletion);
+        affected_rows = mdbms::sm::StorageEngine::get_instance().delete_block(deletion);
 
         std::cout << "QP: Deleted " << affected_rows << " rows from " << table_name << std::endl;
 
         // Log to FRM
-        if (frm_manager && affected_rows > 0) {
+        if (affected_rows > 0) {
             ExecutionResult log_result;
             log_result.transaction_id = transaction_id;
             log_result.timestamp = std::time(nullptr);
@@ -878,7 +873,7 @@ int QueryProcessor::execute_delete(const mdbms::qo::ParsedQuery& parsed_query, i
             // Store deleted rows for UNDO (insert them back)
             log_result.data = rows_to_delete;
             
-            frm_manager->write_log(log_result);
+            mdbms::fr::FailureRecoveryManager::get_instance().write_log(log_result);
         }
 
     } catch (const std::exception& e) {
@@ -901,12 +896,12 @@ bool QueryProcessor::execute_create_table(const mdbms::qo::ParsedQuery& parsed_q
 
         std::string table_name = parsed_query.target_table;
 
-        if (ccm_manager) {
+        {
             Row request;
             request.table_name = table_name;
             request.row_id = -1;
-            ccm_manager->log_object(request, transaction_id);
-            Response access = ccm_manager->validate_object(request, transaction_id, Action::WRITE);
+            mdbms::ccm::ConcurrencyControlManager::get_instance().log_object(request, transaction_id);
+            Response access = mdbms::ccm::ConcurrencyControlManager::get_instance().validate_object(request, transaction_id, Action::WRITE);
             if (!access.allowed) {
                 throw std::runtime_error("Concurrency control denied WRITE access for table " + table_name);
             }
@@ -953,12 +948,11 @@ bool QueryProcessor::execute_create_table(const mdbms::qo::ParsedQuery& parsed_q
             }
         }
 
-        bool success = sm_engine->create_table(schema);
+        bool success = mdbms::sm::StorageEngine::get_instance().create_table(schema);
 
         if (success) {
             std::cout << "QP: Created table " << table_name << std::endl;
-
-            if (frm_manager) {
+            {
                 ExecutionResult log_result;
                 log_result.transaction_id = transaction_id;
                 log_result.timestamp = std::time(nullptr);
@@ -967,9 +961,10 @@ bool QueryProcessor::execute_create_table(const mdbms::qo::ParsedQuery& parsed_q
                 } else {
                     log_result.query = "CREATE TABLE " + table_name;
                 }
+                log_result.table_name = table_name;
                 log_result.success = true;
                 log_result.affected_rows = 0;
-                frm_manager->write_log(log_result);
+                mdbms::fr::FailureRecoveryManager::get_instance().write_log(log_result);
             }
         }
 
@@ -988,24 +983,25 @@ bool QueryProcessor::execute_drop_table(const mdbms::qo::ParsedQuery& parsed_que
         }
 
         std::string table_name = parsed_query.target_table;
+        
+        mdbms::fr::FailureRecoveryManager::get_instance().prepare_ddl_operation(table_name, Operation::DROP_TABLE);
 
-        if (ccm_manager) {
+        {
             Row request;
             request.table_name = table_name;
             request.row_id = -1;
-            ccm_manager->log_object(request, transaction_id);
-            Response access = ccm_manager->validate_object(request, transaction_id, Action::WRITE);
+            mdbms::ccm::ConcurrencyControlManager::get_instance().log_object(request, transaction_id);
+            Response access = mdbms::ccm::ConcurrencyControlManager::get_instance().validate_object(request, transaction_id, Action::WRITE);
             if (!access.allowed) {
                 throw std::runtime_error("Concurrency control denied WRITE access for table " + table_name);
             }
         }
 
-        bool success = sm_engine->drop_table(table_name);
+        bool success = mdbms::sm::StorageEngine::get_instance().drop_table(table_name);
 
         if (success) {
             std::cout << "QP: Dropped table " << table_name << std::endl;
-
-            if (frm_manager) {
+            {
                 ExecutionResult log_result;
                 log_result.transaction_id = transaction_id;
                 log_result.timestamp = std::time(nullptr);
@@ -1014,9 +1010,10 @@ bool QueryProcessor::execute_drop_table(const mdbms::qo::ParsedQuery& parsed_que
                 } else {
                     log_result.query = "DROP TABLE " + table_name;
                 }
+                log_result.table_name = table_name;
                 log_result.success = true;
                 log_result.affected_rows = 0;
-                frm_manager->write_log(log_result);
+                mdbms::fr::FailureRecoveryManager::get_instance().write_log(log_result);
             }
         }
 
@@ -1029,17 +1026,17 @@ bool QueryProcessor::execute_drop_table(const mdbms::qo::ParsedQuery& parsed_que
 }
 
 int QueryProcessor::begin_transaction() {
-    int tid = ccm_manager->begin_transaction();
+    int tid = mdbms::ccm::ConcurrencyControlManager::get_instance().begin_transaction();
     std::cout << "QP: Transaction " << tid << " started" << std::endl;
 
     // Log to recovery manager
-    if (frm_manager) {
+    {
         ExecutionResult log_entry;
         log_entry.transaction_id = tid;
         log_entry.query = "BEGIN TRANSACTION";
         log_entry.timestamp = std::time(nullptr);
         log_entry.success = true;
-        frm_manager->write_log(log_entry);
+        mdbms::fr::FailureRecoveryManager::get_instance().write_log(log_entry);
     }
 
     return tid;
@@ -1054,22 +1051,10 @@ bool QueryProcessor::commit_transaction(int transaction_id) {
     std::cout << "QP: Committing transaction " << transaction_id << std::endl;
 
     // End transaction in CCM
-    if (ccm_manager) {
-        ccm_manager->end_transaction(transaction_id);
-    }
+    mdbms::ccm::ConcurrencyControlManager::get_instance().end_transaction(transaction_id);
 
-    // Log to recovery manager
-    if (frm_manager) {
-        ExecutionResult log_entry;
-        log_entry.transaction_id = transaction_id;
-        log_entry.query = "COMMIT";
-        log_entry.timestamp = std::time(nullptr);
-        log_entry.success = true;
-        frm_manager->write_log(log_entry);
-        
-        // Save checkpoint after commit
-        frm_manager->save_checkpoint();
-    }
+    // Use FRM commit with proper WAL protocol
+    mdbms::fr::FailureRecoveryManager::get_instance().commit_transaction(transaction_id);
 
     return true;
 }
@@ -1083,16 +1068,33 @@ bool QueryProcessor::abort_transaction(int transaction_id) {
     std::cout << "QP: Aborting transaction " << transaction_id << std::endl;
 
     // End transaction in CCM
-    if (ccm_manager) {
-        ccm_manager->end_transaction(transaction_id);
+    mdbms::ccm::ConcurrencyControlManager::get_instance().end_transaction(transaction_id);
+
+    // Use FRM abort (efficient: discard buffer + UNDO from disk if needed)
+    mdbms::fr::FailureRecoveryManager::get_instance().abort_transaction(transaction_id);
+
+    return true;
+}
+
+// Old abort implementation (for reference, can be removed)
+bool QueryProcessor::abort_transaction_old(int transaction_id) {
+    if (transaction_id == -1) {
+        std::cerr << "QP: No active transaction to abort" << std::endl;
+        return false;
     }
 
+    std::cout << "QP: Aborting transaction (old method) " << transaction_id << std::endl;
+
+    // End transaction in CCM
+    mdbms::ccm::ConcurrencyControlManager::get_instance().end_transaction(transaction_id);
+
     // Request recovery manager to UNDO changes
-    if (frm_manager) {
+    {
         RecoverCriteria criteria;
         criteria.transaction_id = transaction_id;
         criteria.use_timestamp = false;
-        frm_manager->recover(criteria);
+        // Note: This old method always UNDOs from disk, even if data is in buffer
+        // mdbms::fr::FailureRecoveryManager::get_instance().recover(criteria);
 
         // Log abort
         ExecutionResult log_entry;
@@ -1100,7 +1102,7 @@ bool QueryProcessor::abort_transaction(int transaction_id) {
         log_entry.query = "ABORT";
         log_entry.timestamp = std::time(nullptr);
         log_entry.success = true;
-        frm_manager->write_log(log_entry);
+        mdbms::fr::FailureRecoveryManager::get_instance().write_log(log_entry);
     }
 
     return true;

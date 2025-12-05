@@ -128,16 +128,24 @@ namespace mdbms::qo {
 
 class OptimizationEngine {
    public:
-    OptimizationEngine();
-    ~OptimizationEngine();
-
+    // Singleton: delete copy constructor and assignment operator
+    OptimizationEngine(const OptimizationEngine&) = delete;
+    OptimizationEngine& operator=(const OptimizationEngine&) = delete;
+    
+    // Singleton: get instance
     static OptimizationEngine& get_instance();
+    
+    ~OptimizationEngine();
 
     ParsedQuery parse_query(const std::string& query);
     ParsedQuery optimize_query(const ParsedQuery& query,
                                const mdbms::sm::StorageEngine* storage = nullptr);
     ParsedQuery analyze_query(const std::string& query,
                               const mdbms::sm::StorageEngine* storage = nullptr);
+
+   private:
+    // Singleton: private constructor
+    OptimizationEngine();
 };
 
 // Parser and logical plan builder helpers
