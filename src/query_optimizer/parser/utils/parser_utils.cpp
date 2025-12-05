@@ -28,18 +28,47 @@ std::vector<std::string> split_on_keyword(const std::string& input,
         return parts;
     }
 
-    std::string upper = to_upper(input);
-    std::string upper_keyword = to_upper(keyword);
+    const std::string upper_keyword = to_upper(keyword);
     size_t start = 0;
-    size_t pos = upper.find(upper_keyword, start);
+    bool in_single = false;
+    bool in_double = false;
 
-    while (pos != std::string::npos) {
-        std::string chunk = trim(input.substr(start, pos - start));
-        if (!chunk.empty()) {
-            parts.push_back(chunk);
+    auto is_boundary = [](char c) {
+        return c == '\0' || std::isspace(static_cast<unsigned char>(c)) || c == '(' || c == ')' || c == ';';
+    };
+
+    for (size_t i = 0; i < input.size(); ++i) {
+        char c = input[i];
+
+        if (c == '\'' && !in_double) {
+            in_single = !in_single;
+            continue;
         }
-        start = pos + upper_keyword.size();
-        pos = upper.find(upper_keyword, start);
+        if (c == '\"' && !in_single) {
+            in_double = !in_double;
+            continue;
+        }
+        if (in_single || in_double) {
+            continue;
+        }
+
+        if (i + upper_keyword.size() > input.size()) {
+            continue;
+        }
+
+        std::string candidate = to_upper(input.substr(i, upper_keyword.size()));
+        if (candidate == upper_keyword) {
+            char prev = (i == 0) ? '\0' : input[i - 1];
+            char next = (i + upper_keyword.size() >= input.size()) ? '\0' : input[i + upper_keyword.size()];
+            if (is_boundary(prev) && is_boundary(next)) {
+                std::string chunk = trim(input.substr(start, i - start));
+                if (!chunk.empty()) {
+                    parts.push_back(chunk);
+                }
+                start = i + upper_keyword.size();
+                i = start - 1;
+            }
+        }
     }
 
     std::string tail = trim(input.substr(start));
