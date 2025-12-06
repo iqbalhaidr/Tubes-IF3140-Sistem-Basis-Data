@@ -103,13 +103,9 @@ ExecutionResult QueryProcessor::execute_query(const std::string& query) {
             throw std::runtime_error("Unsupported query type: " + query_type);
         }
 
-        // Log to Failure Recovery Manager
-        if (result.success) {
-            mdbms::fr::FailureRecoveryManager::get_instance().write_log(result);
-        }
-
         // Auto-commit queries only if transaction was auto-started (not explicitly started with BEGIN)
         if (!explicit_transaction_started) {
+            mdbms::fr::FailureRecoveryManager::get_instance().commit_transaction(result.transaction_id);
             mdbms::ccm::ConcurrencyControlManager::get_instance().end_transaction(result.transaction_id);
             current_transaction_id = -1;
         }
