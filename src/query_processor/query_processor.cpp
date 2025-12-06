@@ -288,88 +288,146 @@ Rows<Row> QueryProcessor::apply_where_clause(const Rows<Row>& rows, const std::v
     Rows<Row> result;
     result.column_names = rows.column_names;
 
+    // Helper function to find column value in a row (handles prefixed/aliased columns)
+    auto find_column_value = [](const Row& row, const std::string& col_name) -> std::pair<bool, std::any> {
+        // Direct match
+        auto it = row.columns.find(col_name);
+        if (it != row.columns.end()) {
+            return {true, it->second};
+        }
+
+        // Try exact suffix match (e.g., "Item.CatID" looking for "CatID")
+        for (const auto& col_pair : row.columns) {
+            // Check if col_name is a suffix (after a dot)
+            size_t dot_pos = col_pair.first.rfind('.');
+            if (dot_pos != std::string::npos) {
+                std::string suffix = col_pair.first.substr(dot_pos + 1);
+                if (suffix == col_name) {
+                    return {true, col_pair.second};
+                }
+            }
+        }
+
+        // Try prefix match (e.g., looking for "Item.CatID" when row has "CatID")
+        size_t dot_pos = col_name.rfind('.');
+        if (dot_pos != std::string::npos) {
+            std::string col_suffix = col_name.substr(dot_pos + 1);
+            std::string col_prefix = col_name.substr(0, dot_pos);
+
+            // First try to find with full qualified name in row
+            for (const auto& col_pair : row.columns) {
+                if (col_pair.first == col_name) {
+                    return {true, col_pair.second};
+                }
+            }
+
+            // Then try just the suffix, but verify table name matches
+            auto suffix_it = row.columns.find(col_suffix);
+            if (suffix_it != row.columns.end()) {
+                // Check if this could be from the right table (by checking table_name or prefix)
+                return {true, suffix_it->second};
+            }
+        }
+
+        return {false, std::any{}};
+    };
+
+    // Helper to check if operand is a column reference (contains "." with table prefix)
+    auto is_column_reference = [](const std::any& operand) -> std::pair<bool, std::string> {
+        if (operand.type() != typeid(std::string)) {
+            return {false, ""};
+        }
+        std::string str = std::any_cast<std::string>(operand);
+        size_t dot_pos = str.find('.');
+        if (dot_pos != std::string::npos && dot_pos > 0 && dot_pos < str.size() - 1) {
+            // Check if it looks like Table.Column (starts with uppercase or is a valid identifier)
+            return {true, str};
+        }
+        return {false, ""};
+    };
+
     for (const auto& row : rows.data) {
         bool matches_all = true;
 
         for (const auto& cond : conditions) {
-            std::string actual_column = cond.column;
-            
-            if (row.columns.find(cond.column) == row.columns.end()) {
-                bool found = false;
-                for (const auto& col_pair : row.columns) {
-                    if (col_pair.first.size() >= cond.column.size()) {
-                        size_t suffix_start = col_pair.first.size() - cond.column.size();
-                        if (col_pair.first.substr(suffix_start) == cond.column) {
-                            if (suffix_start == 0 || col_pair.first[suffix_start - 1] == '.') {
-                                actual_column = col_pair.first;
-                                found = true;
-                                break;
-                            }
-                        }
-                    }
-                    if (col_pair.first == cond.column) {
-                        actual_column = col_pair.first;
-                        found = true;
-                        break;
-                    }
-                }
-                if (!found) {
+            // Find left side column value
+            auto [left_found, left_val] = find_column_value(row, cond.column);
+            if (!left_found) {
+                matches_all = false;
+                break;
+            }
+
+            // Check if operand is a column reference (for column-to-column comparison)
+            auto [is_col_ref, col_ref_name] = is_column_reference(cond.operand);
+
+            std::any compare_val;
+            if (is_col_ref) {
+                // Column-to-column comparison (e.g., WHERE Item.CatID = Category.CatID)
+                auto [right_found, right_val] = find_column_value(row, col_ref_name);
+                if (!right_found) {
                     matches_all = false;
                     break;
                 }
+                compare_val = right_val;
+            } else {
+                // Regular literal comparison
+                compare_val = cond.operand;
             }
 
-            const std::any& value = row.columns.at(actual_column);
             bool condition_met = false;
 
             try {
                 // Compare integer
-                if (value.type() == typeid(int)) {
-                    int row_val = std::any_cast<int>(value);
+                if (left_val.type() == typeid(int)) {
+                    int row_val = std::any_cast<int>(left_val);
                     int cond_val = 0;
 
-                    if (cond.operand.type() == typeid(int)) {
-                        cond_val = std::any_cast<int>(cond.operand);
-                    } else if (cond.operand.type() == typeid(float)) {
-                        cond_val = static_cast<int>(std::any_cast<float>(cond.operand));
-                    } else if (cond.operand.type() == typeid(double)) {
-                        cond_val = static_cast<int>(std::any_cast<double>(cond.operand));
+                    if (compare_val.type() == typeid(int)) {
+                        cond_val = std::any_cast<int>(compare_val);
+                    } else if (compare_val.type() == typeid(float)) {
+                        cond_val = static_cast<int>(std::any_cast<float>(compare_val));
+                    } else if (compare_val.type() == typeid(double)) {
+                        cond_val = static_cast<int>(std::any_cast<double>(compare_val));
                     }
 
                     if (cond.operation == "=") condition_met = (row_val == cond_val);
-                    else if (cond.operation == "<>") condition_met = (row_val != cond_val);
+                    else if (cond.operation == "<>" || cond.operation == "!=") condition_met = (row_val != cond_val);
                     else if (cond.operation == ">") condition_met = (row_val > cond_val);
                     else if (cond.operation == ">=") condition_met = (row_val >= cond_val);
                     else if (cond.operation == "<") condition_met = (row_val < cond_val);
                     else if (cond.operation == "<=") condition_met = (row_val <= cond_val);
                 }
                 // Compare float
-                else if (value.type() == typeid(float)) {
-                    float row_val = std::any_cast<float>(value);
+                else if (left_val.type() == typeid(float)) {
+                    float row_val = std::any_cast<float>(left_val);
                     float cond_val = 0.0f;
 
-                    if (cond.operand.type() == typeid(float)) {
-                        cond_val = std::any_cast<float>(cond.operand);
-                    } else if (cond.operand.type() == typeid(int)) {
-                        cond_val = static_cast<float>(std::any_cast<int>(cond.operand));
-                    } else if (cond.operand.type() == typeid(double)) {
-                        cond_val = static_cast<float>(std::any_cast<double>(cond.operand));
+                    if (compare_val.type() == typeid(float)) {
+                        cond_val = std::any_cast<float>(compare_val);
+                    } else if (compare_val.type() == typeid(int)) {
+                        cond_val = static_cast<float>(std::any_cast<int>(compare_val));
+                    } else if (compare_val.type() == typeid(double)) {
+                        cond_val = static_cast<float>(std::any_cast<double>(compare_val));
                     }
 
                     if (cond.operation == "=") condition_met = (row_val == cond_val);
-                    else if (cond.operation == "<>") condition_met = (row_val != cond_val);
+                    else if (cond.operation == "<>" || cond.operation == "!=") condition_met = (row_val != cond_val);
                     else if (cond.operation == ">") condition_met = (row_val > cond_val);
                     else if (cond.operation == ">=") condition_met = (row_val >= cond_val);
                     else if (cond.operation == "<") condition_met = (row_val < cond_val);
                     else if (cond.operation == "<=") condition_met = (row_val <= cond_val);
                 }
                 // Compare string
-                else if (value.type() == typeid(std::string)) {
-                    std::string row_val = std::any_cast<std::string>(value);
-                    std::string cond_val = std::any_cast<std::string>(cond.operand);
+                else if (left_val.type() == typeid(std::string)) {
+                    std::string row_val = std::any_cast<std::string>(left_val);
+                    std::string cond_val;
+
+                    if (compare_val.type() == typeid(std::string)) {
+                        cond_val = std::any_cast<std::string>(compare_val);
+                    }
 
                     if (cond.operation == "=") condition_met = (row_val == cond_val);
-                    else if (cond.operation == "<>") condition_met = (row_val != cond_val);
+                    else if (cond.operation == "<>" || cond.operation == "!=") condition_met = (row_val != cond_val);
                     else if (cond.operation == ">") condition_met = (row_val > cond_val);
                     else if (cond.operation == ">=") condition_met = (row_val >= cond_val);
                     else if (cond.operation == "<") condition_met = (row_val < cond_val);
@@ -467,187 +525,6 @@ Rows<Row> QueryProcessor::apply_limit(const Rows<Row>& rows, int limit) {
     }
 
     result.rows_count = static_cast<int>(result.data.size());
-    return result;
-}
-
-Rows<Row> QueryProcessor::execute_join(const Rows<Row>& left_table, const Rows<Row>& right_table, const Condition& join_condition, const std::string& join_type) {
-    Rows<Row> result;
-
-    result.column_names = left_table.column_names;
-    for (const auto& col : right_table.column_names) {
-        result.column_names.push_back(col);
-    }
-
-    std::string left_col = join_condition.column;
-    std::string right_col;
-
-    if (join_type == "NATURAL") {
-        std::vector<std::string> common_columns;
-
-        if (!left_table.data.empty() && !right_table.data.empty()) {
-            for (const auto& left_col_name : left_table.column_names) {
-                if (std::find(right_table.column_names.begin(), right_table.column_names.end(), left_col_name) != right_table.column_names.end()) {
-                    if (right_table.data[0].columns.find(left_col_name) != right_table.data[0].columns.end()) {
-                        common_columns.push_back(left_col_name);
-                    }
-                }
-            }
-        }
-
-        // Kalau tidak ada common columns, dilakukan cartesian product
-        if (common_columns.empty()) {
-            for (const auto& left_row : left_table.data) {
-                for (const auto& right_row : right_table.data) {
-                    Row merged;
-                    merged.table_name = left_row.table_name + "_" + right_row.table_name;
-                    merged.columns = left_row.columns;
-                    for (const auto& key : right_table.column_names) {
-                        if (right_row.columns.count(key)) {
-                            merged.columns[key] = right_row.columns.at(key);
-                        }
-                    }
-                    result.data.push_back(merged);
-                }
-            }
-            result.rows_count = static_cast<int>(result.data.size());
-            return result;
-        }
-
-        // Natural join on common columns
-        for (const auto& left_row : left_table.data) {
-            for (const auto& right_row : right_table.data) {
-                bool all_match = true;
-
-                // Check all common columns match
-                for (const auto& col_name : common_columns) {
-                    auto left_it = left_row.columns.find(col_name);
-                    auto right_it = right_row.columns.find(col_name);
-
-                    if (left_it == left_row.columns.end() || right_it == right_row.columns.end()) {
-                        all_match = false;
-                        break;
-                    }
-
-                    const std::any& left_val = left_it->second;
-                    const std::any& right_val = right_it->second;
-
-                    bool values_match = false;
-                    if (left_val.type() == typeid(int) && right_val.type() == typeid(int)) {
-                        values_match = (std::any_cast<int>(left_val) == std::any_cast<int>(right_val));
-                    } else if (left_val.type() == typeid(float) && right_val.type() == typeid(float)) {
-                        values_match = (std::any_cast<float>(left_val) == std::any_cast<float>(right_val));
-                    } else if (left_val.type() == typeid(std::string) && right_val.type() == typeid(std::string)) {
-                        values_match = (std::any_cast<std::string>(left_val) == std::any_cast<std::string>(right_val));
-                    }
-
-                    if (!values_match) {
-                        all_match = false;
-                        break;
-                    }
-                }
-
-                if (all_match) {
-                    Row merged;
-                    merged.table_name = left_row.table_name + "_" + right_row.table_name;
-                    merged.columns = left_row.columns;
-
-                    for (const auto& key : right_table.column_names) {
-                        if (std::find(common_columns.begin(), common_columns.end(), key) == common_columns.end()) {
-                            if (right_row.columns.count(key)) {
-                                merged.columns[key] = right_row.columns.at(key);
-                            }
-                        }
-                    }
-                    result.data.push_back(merged);
-                }
-            }
-        }
-
-        result.rows_count = static_cast<int>(result.data.size());
-        std::cout << "QP: NATURAL JOIN result: " << result.rows_count << " rows" << std::endl;
-        return result;
-    }
-
-    // Cek apakah join_condition memiliki operand
-    bool has_join_condition = join_condition.operand.has_value() && join_condition.operand.type() == typeid(std::string) && !join_condition.column.empty();
-
-    if (has_join_condition) {
-        right_col = std::any_cast<std::string>(join_condition.operand);
-    } else {
-        // Kalau tidak ada operand, dilakukan cartesian product
-        for (const auto& left_row : left_table.data) {
-            for (const auto& right_row : right_table.data) {
-                Row merged;
-                merged.table_name = left_row.table_name + "_" + right_row.table_name;
-                merged.columns = left_row.columns;
-                for (const auto& key : right_table.column_names) {
-                    if (right_row.columns.count(key)) {
-                        merged.columns[key] = right_row.columns.at(key);
-                    }
-                }
-                result.data.push_back(merged);
-            }
-        }
-        result.rows_count = static_cast<int>(result.data.size());
-        return result;
-    }
-
-    // Nested loop join 
-    for (const auto& left_row : left_table.data) {
-        bool matched = false;
-
-        for (const auto& right_row : right_table.data) {
-            auto left_it = left_row.columns.find(left_col);
-            auto right_it = right_row.columns.find(right_col);
-
-            if (left_it == left_row.columns.end() || right_it == right_row.columns.end()) {
-                continue;
-            }
-
-            bool join_match = false;
-            const std::any& left_val = left_it->second;
-            const std::any& right_val = right_it->second;
-
-            try {
-                if (left_val.type() == typeid(int) && right_val.type() == typeid(int)) {
-                    join_match = (std::any_cast<int>(left_val) == std::any_cast<int>(right_val));
-                } else if (left_val.type() == typeid(float) && right_val.type() == typeid(float)) {
-                    join_match = (std::any_cast<float>(left_val) == std::any_cast<float>(right_val));
-                } else if (left_val.type() == typeid(std::string) && right_val.type() == typeid(std::string)) {
-                    join_match = (std::any_cast<std::string>(left_val) == std::any_cast<std::string>(right_val));
-                }
-                else if (left_val.type() == typeid(int) && right_val.type() == typeid(float)) {
-                    join_match = (static_cast<float>(std::any_cast<int>(left_val)) == std::any_cast<float>(right_val));
-                } else if (left_val.type() == typeid(float) && right_val.type() == typeid(int)) {
-                    join_match = (std::any_cast<float>(left_val) == static_cast<float>(std::any_cast<int>(right_val)));
-                }
-            } catch (const std::bad_any_cast&) {
-                continue;
-            }
-
-            if (join_match) {
-                matched = true;
-                Row merged;
-                merged.table_name = left_row.table_name + "_" + right_row.table_name;
-                merged.columns = left_row.columns;
-
-                for (const auto& key : right_table.column_names) {
-                    if (right_row.columns.count(key)) {
-                        if (merged.columns.find(key) != merged.columns.end()) {
-                            merged.columns[right_row.table_name + "." + key] = right_row.columns.at(key);
-                        } else {
-                            merged.columns[key] = right_row.columns.at(key);
-                        }
-                    }
-                }
-
-                result.data.push_back(merged);
-            }
-        }
-    }
-
-    result.rows_count = static_cast<int>(result.data.size());
-    std::cout << "QP: JOIN result: " << result.rows_count << " rows" << std::endl;
     return result;
 }
 
@@ -1291,6 +1168,310 @@ Rows<Row> QueryProcessor::apply_table_aliases(const Rows<Row>& rows, const std::
     }
     
     result.rows_count = result.data.size();
+    return result;
+}
+
+Rows<Row> QueryProcessor::execute_join(const Rows<Row>& left_table, const Rows<Row>& right_table,
+                                        const Condition& join_condition, const std::string& join_type) {
+    Rows<Row> result;
+
+    // Determine if this is cartesian product 
+    bool is_cartesian = join_condition.column.empty() && join_condition.operation.empty() && join_type != "NATURAL";
+
+    // Get table names for prefixing 
+    std::string left_table_name = !left_table.data.empty() ? left_table.data[0].table_name : "left";
+    std::string right_table_name = !right_table.data.empty() ? right_table.data[0].table_name : "right";
+
+    // Merge column names from both tables
+    for (const auto& col : left_table.column_names) {
+        if (is_cartesian && col.find('.') == std::string::npos) {
+            result.column_names.push_back(left_table_name + "." + col);
+        } else {
+            result.column_names.push_back(col);
+        }
+    }
+    for (const auto& col : right_table.column_names) {
+        if (is_cartesian && col.find('.') == std::string::npos) {
+            result.column_names.push_back(right_table_name + "." + col);
+        } else {
+            result.column_names.push_back(col);
+        }
+    }
+
+    // NATURAL JOIN: Find common columns and join on them
+    if (join_type == "NATURAL") {
+        // Find common columns between left and right tables
+        std::vector<std::string> common_columns;
+
+        if (!left_table.data.empty() && !right_table.data.empty()) {
+            const auto& left_row = left_table.data[0];
+            const auto& right_row = right_table.data[0];
+
+            for (const auto& left_col : left_row.columns) {
+                if (right_row.columns.find(left_col.first) != right_row.columns.end()) {
+                    common_columns.push_back(left_col.first);
+                }
+            }
+        }
+
+        if (common_columns.empty()) {
+            // No common columns, return empty result
+            std::cout << "QP: NATURAL JOIN - No common columns found" << std::endl;
+            result.rows_count = 0;
+            return result;
+        }
+
+        std::cout << "QP: NATURAL JOIN on columns: ";
+        for (const auto& col : common_columns) {
+            std::cout << col << " ";
+        }
+        std::cout << std::endl;
+
+        // Perform natural join
+        for (const auto& left_row : left_table.data) {
+            for (const auto& right_row : right_table.data) {
+                bool all_match = true;
+
+                // Check if all common columns have matching values
+                for (const auto& common_col : common_columns) {
+                    auto left_it = left_row.columns.find(common_col);
+                    auto right_it = right_row.columns.find(common_col);
+
+                    if (left_it == left_row.columns.end() || right_it == right_row.columns.end()) {
+                        all_match = false;
+                        break;
+                    }
+
+                    // Compare values
+                    bool values_match = false;
+                    try {
+                        if (left_it->second.type() == typeid(int) && right_it->second.type() == typeid(int)) {
+                            values_match = (std::any_cast<int>(left_it->second) == std::any_cast<int>(right_it->second));
+                        } else if (left_it->second.type() == typeid(float) && right_it->second.type() == typeid(float)) {
+                            values_match = (std::any_cast<float>(left_it->second) == std::any_cast<float>(right_it->second));
+                        } else if (left_it->second.type() == typeid(std::string) && right_it->second.type() == typeid(std::string)) {
+                            values_match = (std::any_cast<std::string>(left_it->second) == std::any_cast<std::string>(right_it->second));
+                        } else if (left_it->second.type() == typeid(int) && right_it->second.type() == typeid(float)) {
+                            values_match = (std::any_cast<int>(left_it->second) == static_cast<int>(std::any_cast<float>(right_it->second)));
+                        } else if (left_it->second.type() == typeid(float) && right_it->second.type() == typeid(int)) {
+                            values_match = (static_cast<int>(std::any_cast<float>(left_it->second)) == std::any_cast<int>(right_it->second));
+                        }
+                    } catch (const std::bad_any_cast&) {
+                        values_match = false;
+                    }
+
+                    if (!values_match) {
+                        all_match = false;
+                        break;
+                    }
+                }
+
+                if (all_match) {
+                    Row joined_row;
+                    joined_row.row_id = left_row.row_id;
+                    joined_row.table_name = left_row.table_name;
+
+                    // Copy all columns from left table
+                    for (const auto& col : left_row.columns) {
+                        joined_row.columns[col.first] = col.second;
+                    }
+
+                    // Copy columns from right table (skip common columns to avoid duplicates)
+                    for (const auto& col : right_row.columns) {
+                        if (std::find(common_columns.begin(), common_columns.end(), col.first) == common_columns.end()) {
+                            joined_row.columns[col.first] = col.second;
+                        }
+                    }
+
+                    result.data.push_back(joined_row);
+                }
+            }
+        }
+
+        result.rows_count = static_cast<int>(result.data.size());
+        std::cout << "QP: NATURAL JOIN produced " << result.rows_count << " rows" << std::endl;
+        return result;
+    }
+
+    // INNER JOIN with ON condition or Cartesian Product (CROSS JOIN)
+    if (is_cartesian) {
+        // Cartesian Product (CROSS JOIN)
+        std::cout << "QP: Performing Cartesian Product" << std::endl;
+
+        for (const auto& left_row : left_table.data) {
+            for (const auto& right_row : right_table.data) {
+                Row joined_row;
+                joined_row.row_id = left_row.row_id;
+                joined_row.table_name = left_row.table_name;
+
+                // Copy all columns from left table (prefix with table name to avoid collision)
+                for (const auto& col : left_row.columns) {
+                    // If column already has a prefix (contains '.'), keep it otherwise add table name
+                    if (col.first.find('.') != std::string::npos) {
+                        joined_row.columns[col.first] = col.second;
+                    } else {
+                        std::string prefixed_col = left_row.table_name + "." + col.first;
+                        joined_row.columns[prefixed_col] = col.second;
+                    }
+                }
+
+                // Copy all columns from right table (prefix with table name to avoid collision)
+                for (const auto& col : right_row.columns) {
+                    // If column already has a prefix (contains '.'), keep it otherwise add table name
+                    if (col.first.find('.') != std::string::npos) {
+                        joined_row.columns[col.first] = col.second;
+                    } else {
+                        std::string prefixed_col = right_row.table_name + "." + col.first;
+                        joined_row.columns[prefixed_col] = col.second;
+                    }
+                }
+
+                result.data.push_back(joined_row);
+            }
+        }
+
+        result.rows_count = static_cast<int>(result.data.size());
+        std::cout << "QP: Cartesian Product produced " << result.rows_count << " rows" << std::endl;
+        return result;
+    }
+
+    // JOIN ON condition
+    std::string left_col = join_condition.column;
+    std::string right_col;
+
+    // The operand contains the right column name as a string
+    try {
+        right_col = std::any_cast<std::string>(join_condition.operand);
+    } catch (const std::bad_any_cast&) {
+        std::cerr << "QP: JOIN condition operand is not a column name" << std::endl;
+        result.rows_count = 0;
+        return result;
+    }
+
+    // Helper function to find column value (handles aliased/prefixed columns)
+    auto find_column_value = [](const Row& row, const std::string& col_name) -> std::pair<bool, std::any> {
+        // Direct match
+        auto it = row.columns.find(col_name);
+        if (it != row.columns.end()) {
+            return {true, it->second};
+        }
+
+        // If col_name has a prefix try to find just the suffix 
+        size_t col_dot_pos = col_name.rfind('.');
+        if (col_dot_pos != std::string::npos) {
+            std::string col_suffix = col_name.substr(col_dot_pos + 1);
+            auto suffix_it = row.columns.find(col_suffix);
+            if (suffix_it != row.columns.end()) {
+                return {true, suffix_it->second};
+            }
+        }
+
+        // Try to find by suffix 
+        for (const auto& col_pair : row.columns) {
+            size_t dot_pos = col_pair.first.rfind('.');
+            if (dot_pos != std::string::npos) {
+                std::string suffix = col_pair.first.substr(dot_pos + 1);
+                if (suffix == col_name) {
+                    return {true, col_pair.second};
+                }
+            }
+        }
+
+        return {false, std::any{}};
+    };
+
+    // Perform join
+    for (const auto& left_row : left_table.data) {
+        auto [left_found, left_val] = find_column_value(left_row, left_col);
+        if (!left_found) {
+            continue;
+        }
+
+        for (const auto& right_row : right_table.data) {
+            auto [right_found, right_val] = find_column_value(right_row, right_col);
+            if (!right_found) {
+                continue;
+            }
+
+            // Compare values based on the operation
+            bool condition_met = false;
+
+            try {
+                // Handle different type combinations
+                if (left_val.type() == typeid(int)) {
+                    int left_int = std::any_cast<int>(left_val);
+                    int right_int = 0;
+
+                    if (right_val.type() == typeid(int)) {
+                        right_int = std::any_cast<int>(right_val);
+                    } else if (right_val.type() == typeid(float)) {
+                        right_int = static_cast<int>(std::any_cast<float>(right_val));
+                    } else if (right_val.type() == typeid(double)) {
+                        right_int = static_cast<int>(std::any_cast<double>(right_val));
+                    }
+
+                    if (join_condition.operation == "=") condition_met = (left_int == right_int);
+                    else if (join_condition.operation == "<>") condition_met = (left_int != right_int);
+                    else if (join_condition.operation == ">") condition_met = (left_int > right_int);
+                    else if (join_condition.operation == ">=") condition_met = (left_int >= right_int);
+                    else if (join_condition.operation == "<") condition_met = (left_int < right_int);
+                    else if (join_condition.operation == "<=") condition_met = (left_int <= right_int);
+                } else if (left_val.type() == typeid(float)) {
+                    float left_float = std::any_cast<float>(left_val);
+                    float right_float = 0.0f;
+
+                    if (right_val.type() == typeid(float)) {
+                        right_float = std::any_cast<float>(right_val);
+                    } else if (right_val.type() == typeid(int)) {
+                        right_float = static_cast<float>(std::any_cast<int>(right_val));
+                    } else if (right_val.type() == typeid(double)) {
+                        right_float = static_cast<float>(std::any_cast<double>(right_val));
+                    }
+
+                    if (join_condition.operation == "=") condition_met = (left_float == right_float);
+                    else if (join_condition.operation == "<>") condition_met = (left_float != right_float);
+                    else if (join_condition.operation == ">") condition_met = (left_float > right_float);
+                    else if (join_condition.operation == ">=") condition_met = (left_float >= right_float);
+                    else if (join_condition.operation == "<") condition_met = (left_float < right_float);
+                    else if (join_condition.operation == "<=") condition_met = (left_float <= right_float);
+                } else if (left_val.type() == typeid(std::string)) {
+                    std::string left_str = std::any_cast<std::string>(left_val);
+                    std::string right_str = std::any_cast<std::string>(right_val);
+
+                    if (join_condition.operation == "=") condition_met = (left_str == right_str);
+                    else if (join_condition.operation == "<>") condition_met = (left_str != right_str);
+                    else if (join_condition.operation == ">") condition_met = (left_str > right_str);
+                    else if (join_condition.operation == ">=") condition_met = (left_str >= right_str);
+                    else if (join_condition.operation == "<") condition_met = (left_str < right_str);
+                    else if (join_condition.operation == "<=") condition_met = (left_str <= right_str);
+                }
+            } catch (const std::bad_any_cast& e) {
+                std::cerr << "QP: Type mismatch in JOIN condition" << std::endl;
+                continue;
+            }
+
+            if (condition_met) {
+                Row joined_row;
+                joined_row.row_id = left_row.row_id;
+                joined_row.table_name = left_row.table_name;
+
+                // Copy all columns from left table
+                for (const auto& col : left_row.columns) {
+                    joined_row.columns[col.first] = col.second;
+                }
+
+                // Copy all columns from right table
+                for (const auto& col : right_row.columns) {
+                    joined_row.columns[col.first] = col.second;
+                }
+
+                result.data.push_back(joined_row);
+            }
+        }
+    }
+
+    result.rows_count = static_cast<int>(result.data.size());
+    std::cout << "QP: JOIN produced " << result.rows_count << " rows" << std::endl;
     return result;
 }
 
