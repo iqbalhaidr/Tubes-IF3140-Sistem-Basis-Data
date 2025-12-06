@@ -1169,6 +1169,18 @@ bool QueryProcessor::execute_create_table(const mdbms::qo::ParsedQuery& parsed_q
 
         if (success) {
             std::cout << "QP: Created table " << table_name << std::endl;
+
+            // Auto-create B+ Tree index on primary key
+            if (!schema.primary_key.empty()) {
+                std::cout << "QP: Auto-creating B+ Tree index on primary key: "
+                          << schema.primary_key << std::endl;
+                mdbms::sm::StorageEngine::get_instance().set_index(
+                    table_name,
+                    schema.primary_key,
+                    IndexType::BTREE
+                );
+            }
+
             {
                 ExecutionResult log_result;
                 log_result.transaction_id = transaction_id;
