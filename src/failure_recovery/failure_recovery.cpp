@@ -66,7 +66,20 @@ FailureRecoveryManager::FailureRecoveryManager()
     std::cout << "FRM: Konstruktor FailureRecoveryManager dipanggil..." << std::endl;
     std::cout << "FRM: Log file path: " << this->log_file_path << std::endl;
 
-    recover_from_crash();
+    // Check if previous shutdown was abnormal (crash)
+    std::string crash_marker = "data/.running";
+    bool was_crash = std::filesystem::exists(crash_marker);
+    
+    if (was_crash) {
+        std::cout << "FRM: Detected abnormal shutdown - performing crash recovery..." << std::endl;
+        recover_from_crash();
+    } else {
+        std::cout << "FRM: Normal startup - no crash recovery needed." << std::endl;
+    }
+    
+    // Create marker file to indicate system is running
+    std::ofstream marker(crash_marker);
+    marker.close();
 
     std::vector<LogEntry> existing = read_all_logs(this->log_file_path);
     if (!existing.empty()) {
@@ -87,6 +100,13 @@ FailureRecoveryManager::~FailureRecoveryManager() {
     if (checkpoint_thread_.joinable()) {
         checkpoint_thread_.join();
         std::cout << "FRM: Periodic checkpoint thread stopped" << std::endl;
+    }
+    
+    // Remove crash marker to indicate clean shutdown
+    std::string crash_marker = "data/.running";
+    if (std::filesystem::exists(crash_marker)) {
+        std::filesystem::remove(crash_marker);
+        std::cout << "FRM: Clean shutdown - crash marker removed" << std::endl;
     }
     
     save_checkpoint();
@@ -243,17 +263,53 @@ void FailureRecoveryManager::abort_transaction(int transaction_id) {
 
     std::cout << "FRM: Aborting transaction " << transaction_id << "..." << std::endl;
     
-    // clear buffer
-    // harusnya clear buffer hanya untuk transaksi yang diabort (tpi skrng masih clear semua)
-    std::cout << "FRM: Discarding uncommitted buffer pages..." << std::endl;
-    sm::StorageEngine::get_instance().clear_buffer_for_testing(); 
+    // Check if transaction has any data modifications
+    bool has_data_modifications = false;
+    {
+        std::lock_guard<std::mutex> lock(this->mtx);
+        
+        // Check log buffer first
+        for (const auto& entry : this->log_buffer) {
+            if (entry.transaction_id == transaction_id && 
+                (entry.operation == Operation::INSERT || 
+                 entry.operation == Operation::UPDATE || 
+                 entry.operation == Operation::DELETE)) {
+                has_data_modifications = true;
+                break;
+            }
+        }
+        
+        // If not found in buffer, check persisted logs
+        if (!has_data_modifications) {
+            std::vector<LogEntry> all_logs = read_all_logs(this->log_file_path);
+            for (const auto& entry : all_logs) {
+                if (entry.transaction_id == transaction_id && 
+                    (entry.operation == Operation::INSERT || 
+                     entry.operation == Operation::UPDATE || 
+                     entry.operation == Operation::DELETE)) {
+                    has_data_modifications = true;
+                    break;
+                }
+            }
+        }
+    }
     
-    // undo dari log untuk data yang sudah diflush ke disk
-    std::cout << "FRM: Performing UNDO from log..." << std::endl;
-    RecoverCriteria criteria;
-    criteria.transaction_id = transaction_id;
-    criteria.use_timestamp = false;
-    recover(criteria);
+    // Only clear buffer and perform UNDO if there are actual data modifications
+    if (has_data_modifications) {
+        // clear buffer
+        // harusnya clear buffer hanya untuk transaksi yang diabort (tpi skrng masih clear semua)
+        std::cout << "FRM: Discarding uncommitted buffer pages..." << std::endl;
+        sm::StorageEngine::get_instance().clear_buffer_for_testing(); 
+        
+        // undo dari log untuk data yang sudah diflush ke disk
+        std::cout << "FRM: Performing UNDO from log..." << std::endl;
+        RecoverCriteria criteria;
+        criteria.transaction_id = transaction_id;
+        criteria.use_timestamp = false;
+        recover(criteria);
+    } else {
+        std::cout << "FRM: No data modifications found, skip UNDO process." << std::endl;
+    }
     
     // tulis abort log entry ke buffer
     std::lock_guard<std::mutex> lock(this->mtx);
