@@ -1076,6 +1076,227 @@ bool test_where_greater_equal() {
 }
 
 // ============================================================================
+// INTEGRATION TEST: Query Processor with JOIN and WHERE
+// ============================================================================
+
+/**
+ * Pengujian untuk komponen Query Processor
+ * Description: Menguji apakah Query Processor dapat menjalankan query dengan 
+ *              JOIN dan kondisi WHERE, memproses data dari multiple tables
+ * Goal: Memastikan query dieksekusi dengan benar setelah optimasi
+ * Method: Menyiapkan data Customer dan Purchase, menjalankan JOIN query dengan
+ *         kondisi WHERE, mencetak hasil sebelum dan sesudah filtering
+ * Success Criterion: 
+ *   - JOIN menghasilkan kombinasi rows yang benar
+ *   - WHERE filtering bekerja dengan multiple conditions (AND)
+ *   - Data hasil sesuai dengan kondisi: Quantity > 2 AND CustID > 50
+ * Input: SELECT CustName, Quantity FROM Customer c JOIN Purchase p 
+ *        ON c.CustID = p.CustID WHERE p.Quantity > 2 AND c.CustID > 50
+ */
+bool test_integration_join_where() {
+    std::cout << "\n=== INTEGRATION TEST: Query Processor (JOIN + WHERE) ===" << std::endl;
+    std::cout << "Description: Menguji Query Processor dengan JOIN dan WHERE conditions" << std::endl;
+    std::cout << "Input Query: SELECT CustName, Quantity FROM Customer c JOIN Purchase p" << std::endl;
+    std::cout << "             ON c.CustID = p.CustID WHERE p.Quantity > 2 AND c.CustID > 50" << std::endl;
+    std::cout << std::string(70, '-') << std::endl;
+    
+    QueryProcessor qp;
+    
+    // =========================================================================
+    // STEP 1: Prepare Customer Data
+    // =========================================================================
+    std::cout << "\n[Step 1] Preparing Customer data..." << std::endl;
+    
+    Rows<Row> customers;
+    customers.column_names = {"CustID", "CustName"};
+    
+    std::vector<std::pair<int, std::string>> customer_data = {
+        {10, "Alice"},
+        {50, "Bob"},
+        {51, "Charlie"},
+        {60, "Diana"},
+        {100, "Eve"}
+    };
+    
+    for (const auto& [id, name] : customer_data) {
+        Row row;
+        row.table_name = "Customer";
+        row.row_id = id;
+        row.columns["CustID"] = id;
+        row.columns["CustName"] = name;
+        customers.data.push_back(row);
+    }
+    customers.rows_count = static_cast<int>(customers.data.size());
+    
+    std::cout << "  Customer table (" << customers.rows_count << " rows):" << std::endl;
+    print_rows(customers);
+    
+    // =========================================================================
+    // STEP 2: Prepare Purchase Data
+    // =========================================================================
+    std::cout << "\n[Step 2] Preparing Purchase data..." << std::endl;
+    
+    Rows<Row> purchases;
+    purchases.column_names = {"PurchaseID", "CustID", "Quantity"};
+    
+    std::vector<std::tuple<int, int, int>> purchase_data = {
+        {1, 10, 5},    // Alice, Qty=5 (CustID <= 50, excluded)
+        {2, 50, 3},    // Bob, Qty=3 (CustID = 50, excluded by > condition)
+        {3, 51, 1},    // Charlie, Qty=1 (Qty <= 2, excluded)
+        {4, 51, 4},    // Charlie, Qty=4 (CustID > 50 AND Qty > 2, INCLUDED)
+        {5, 60, 10},   // Diana, Qty=10 (CustID > 50 AND Qty > 2, INCLUDED)
+        {6, 100, 2},   // Eve, Qty=2 (Qty <= 2, excluded)
+        {7, 100, 7}    // Eve, Qty=7 (CustID > 50 AND Qty > 2, INCLUDED)
+    };
+    
+    for (const auto& [pid, cid, qty] : purchase_data) {
+        Row row;
+        row.table_name = "Purchase";
+        row.row_id = pid;
+        row.columns["PurchaseID"] = pid;
+        row.columns["CustID"] = cid;
+        row.columns["Quantity"] = qty;
+        purchases.data.push_back(row);
+    }
+    purchases.rows_count = static_cast<int>(purchases.data.size());
+    
+    std::cout << "  Purchase table (" << purchases.rows_count << " rows):" << std::endl;
+    print_rows(purchases);
+    
+    // =========================================================================
+    // STEP 3: Execute JOIN (Customer JOIN Purchase ON CustID = CustID)
+    // =========================================================================
+    std::cout << "\n[Step 3] Executing JOIN on CustID..." << std::endl;
+    std::cout << "  JOIN condition: Customer.CustID = Purchase.CustID" << std::endl;
+    
+    Condition join_condition;
+    join_condition.column = "CustID";
+    join_condition.operation = "=";
+    join_condition.operand = std::string("CustID");
+    
+    Rows<Row> joined = qp.execute_join(customers, purchases, join_condition, "INNER");
+    
+    std::cout << "\n  JOIN Result (before WHERE filtering):" << std::endl;
+    std::cout << "  Rows produced: " << joined.rows_count << std::endl;
+    print_rows(joined);
+    
+    // Validate JOIN result
+    // Expected: 7 rows (each purchase matched with its customer)
+    if (joined.rows_count != 7) {
+        std::cerr << "[FAIL] JOIN expected 7 rows, got " << joined.rows_count << std::endl;
+        return false;
+    }
+    std::cout << "  [OK] JOIN produced correct number of rows" << std::endl;
+    
+    // =========================================================================
+    // STEP 4: Apply WHERE Clause (Quantity > 2 AND CustID > 50)
+    // =========================================================================
+    std::cout << "\n[Step 4] Applying WHERE conditions..." << std::endl;
+    std::cout << "  Condition 1: Quantity > 2" << std::endl;
+    std::cout << "  Condition 2: CustID > 50" << std::endl;
+    std::cout << "  Logic: AND (both conditions must be true)" << std::endl;
+    
+    // Find the correct column names in joined result (may be prefixed)
+    std::string qty_col = "Quantity";
+    std::string cust_col = "CustID";
+    
+    // Check if columns are prefixed (e.g., "Purchase.Quantity")
+    if (!joined.data.empty()) {
+        for (const auto& [col, val] : joined.data[0].columns) {
+            if (col.find("Quantity") != std::string::npos) {
+                qty_col = col;
+            }
+            // Use Customer.CustID for the customer ID condition
+            if (col.find("Customer") != std::string::npos && col.find("CustID") != std::string::npos) {
+                cust_col = col;
+            }
+        }
+    }
+    
+    std::vector<Condition> where_conditions = {
+        Condition(qty_col, ">", 2),
+        Condition(cust_col, ">", 50)
+    };
+    
+    Rows<Row> filtered = qp.apply_where_clause(joined, where_conditions);
+    
+    std::cout << "\n  Query Result (after WHERE filtering):" << std::endl;
+    std::cout << "  Rows returned: " << filtered.rows_count << std::endl;
+    print_rows(filtered);
+    
+    // =========================================================================
+    // STEP 5: Validate Results
+    // =========================================================================
+    std::cout << "\n[Step 5] Validating results..." << std::endl;
+    
+    // Expected results:
+    // - Charlie (CustID=51) with Quantity=4
+    // - Diana (CustID=60) with Quantity=10
+    // - Eve (CustID=100) with Quantity=7
+    // Total: 3 rows
+    
+    std::cout << "  Expected: 3 rows (Charlie Qty=4, Diana Qty=10, Eve Qty=7)" << std::endl;
+    std::cout << "  Actual: " << filtered.rows_count << " rows" << std::endl;
+    
+    if (filtered.rows_count != 3) {
+        std::cerr << "[FAIL] WHERE filtering expected 3 rows, got " << filtered.rows_count << std::endl;
+        return false;
+    }
+    
+    // Verify each result row meets the conditions
+    bool all_valid = true;
+    for (const auto& row : filtered.data) {
+        int qty = -1;
+        int cid = -1;
+        std::string name = "";
+        
+        // Extract values (handle both prefixed and non-prefixed columns)
+        for (const auto& [col, val] : row.columns) {
+            if (col.find("Quantity") != std::string::npos) {
+                qty = safe_cast_int(val);
+            }
+            if (col.find("CustID") != std::string::npos) {
+                // Prefer Customer.CustID
+                if (col.find("Customer") != std::string::npos || cid == -1) {
+                    cid = safe_cast_int(val);
+                }
+            }
+            if (col.find("CustName") != std::string::npos) {
+                name = safe_cast_string(val);
+            }
+        }
+        
+        if (qty <= 2 || cid <= 50) {
+            std::cerr << "  [FAIL] Row violates conditions: " << name 
+                      << " (CustID=" << cid << ", Qty=" << qty << ")" << std::endl;
+            all_valid = false;
+        } else {
+            std::cout << "  [OK] Valid row: " << name 
+                      << " (CustID=" << cid << " > 50, Qty=" << qty << " > 2)" << std::endl;
+        }
+    }
+    
+    if (!all_valid) {
+        std::cerr << "[FAIL] Some rows violate WHERE conditions" << std::endl;
+        return false;
+    }
+    
+    // =========================================================================
+    // SUCCESS
+    // =========================================================================
+    std::cout << "\n" << std::string(70, '=') << std::endl;
+    std::cout << "SUCCESS CRITERIA MET:" << std::endl;
+    std::cout << "  [OK] JOIN operation successful (7 rows from 5 customers x 7 purchases)" << std::endl;
+    std::cout << "  [OK] WHERE conditions applied correctly (Quantity > 2 AND CustID > 50)" << std::endl;
+    std::cout << "  [OK] Result contains expected 3 rows" << std::endl;
+    std::cout << "  [OK] All result rows satisfy the conditions" << std::endl;
+    std::cout << std::string(70, '=') << std::endl;
+    
+    std::cout << "\n[PASS] Integration Test: Query Processor (JOIN + WHERE)" << std::endl;
+    return true;
+}
+
+// ============================================================================
 // MAIN
 // ============================================================================
 
@@ -1130,10 +1351,33 @@ int main() {
         }
     }
     
+    // Integration Tests
+    std::cout << "\n--- Running Integration Tests ---\n";
+    
+    std::vector<std::pair<std::string, bool(*)()>> integration_tests = {
+        {"Integration: JOIN + WHERE", test_integration_join_where},
+    };
+    
+    for (const auto& [name, test_fn] : integration_tests) {
+        try {
+            if (test_fn()) {
+                passed++;
+            } else {
+                failed++;
+                std::cerr << "FAILED: " << name << std::endl;
+            }
+        } catch (const std::exception& e) {
+            failed++;
+            std::cerr << "EXCEPTION in " << name << ": " << e.what() << std::endl;
+        }
+    }
+    
     // Summary
     std::cout << "\n================================================" << std::endl;
     std::cout << "              TEST SUMMARY" << std::endl;
     std::cout << "================================================" << std::endl;
+    std::cout << "  Unit Tests:        " << unit_tests.size() << std::endl;
+    std::cout << "  Integration Tests: " << integration_tests.size() << std::endl;
     std::cout << "  Total:  " << (passed + failed) << std::endl;
     std::cout << "  Passed: " << passed << std::endl;
     std::cout << "  Failed: " << failed << std::endl;
