@@ -1306,6 +1306,17 @@ void StorageEngine::set_index(const std::string& table, const std::string& colum
     }
 }
 
+bool StorageEngine::has_index(const std::string& table, const std::string& column) const {
+    // Check if table has an index configured
+    auto it = hash_index_engine.table_index.find(table);
+    if (it == hash_index_engine.table_index.end()) {
+        return false;  // No index for this table
+    }
+
+    // Check if the indexed column matches
+    return (it->second == column);
+}
+
 std::string StorageEngine::to_string_any(const std::any& a) {
     if (a.type() == typeid(std::string)) return std::any_cast<std::string>(a);
     if (a.type() == typeid(const char*)) return std::string(std::any_cast<const char*>(a));

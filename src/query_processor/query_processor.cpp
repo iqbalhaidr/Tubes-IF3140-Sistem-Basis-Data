@@ -160,14 +160,20 @@ Rows<Row> QueryProcessor::execute_select(const mdbms::qo::ParsedQuery& parsed_qu
                 }
             }
 
-            // Check if table has index
-            // if (!parsed_query.where_conditions.empty()) {
-            //     const auto& first_condition = parsed_query.where_conditions[0];
-            //     if (mdbms::sm::StorageEngine::get_instance().has_index(table_name, first_condition.column)) {
-            //         retrieval.search_type = SearchType::INDEX_SCAN;
-            //         retrieval.index_column = first_condition.column;
-            //     }
-            // }
+            // Check if table has index and use it for equality conditions
+            if (!parsed_query.where_conditions.empty()) {
+                // Look for an equality condition that matches an indexed column
+                for (const auto& condition : parsed_query.where_conditions) {
+                    if (condition.operation == "=" &&
+                        mdbms::sm::StorageEngine::get_instance().has_index(table_name, condition.column)) {
+                        retrieval.search_type = SearchType::INDEX_SCAN;
+                        retrieval.index_column = condition.column;
+                        retrieval.conditions = parsed_query.where_conditions;
+                        std::cout << "QP: Using index on " << table_name << "." << condition.column << std::endl;
+                        break; 
+                    }
+                }
+            }
 
             // TODO:
             // Request access permission from Concurrency Control Manager
