@@ -584,17 +584,177 @@ int QueryProcessor::execute_update(const mdbms::qo::ParsedQuery& parsed_query, i
 
         std::cout << "QP: Found " << rows_to_update.rows_count << " rows to update in " << table_name << std::endl;
 
-        DataWrite<Row> update_data;
-        update_data.table = table_name;
-        update_data.conditions = parsed_query.where_conditions;
-        update_data.is_insert = false;
+        auto evaluate_expression = [](const std::string& expr, const Row& row) -> std::any {
+            std::string trimmed_expr = expr;
+            size_t start = trimmed_expr.find_first_not_of(" \t\n\r");
+            size_t end = trimmed_expr.find_last_not_of(" \t\n\r");
+            if (start != std::string::npos && end != std::string::npos) {
+                trimmed_expr = trimmed_expr.substr(start, end - start + 1);
+            }
 
+            // Check for arithmetic operators
+            std::vector<char> operators = {'+', '-', '*', '/'};
+            char found_op = '\0';
+            size_t op_pos = std::string::npos;
+
+            for (char op : {'*', '/'}) {
+                size_t pos = trimmed_expr.rfind(op);
+                if (pos != std::string::npos && pos > 0 && pos < trimmed_expr.size() - 1) {
+                    found_op = op;
+                    op_pos = pos;
+                    break;
+                }
+            }
+            if (found_op == '\0') {
+                for (char op : {'+', '-'}) {
+                    size_t pos = trimmed_expr.rfind(op);
+                    // skip if at position 0
+                    if (pos != std::string::npos && pos > 0 && pos < trimmed_expr.size() - 1) {
+                        found_op = op;
+                        op_pos = pos;
+                        break;
+                    }
+                }
+            }
+
+            if (found_op == '\0') {
+                return std::any(trimmed_expr);
+            }
+
+            // Split into left and right operands
+            std::string left_str = trimmed_expr.substr(0, op_pos);
+            std::string right_str = trimmed_expr.substr(op_pos + 1);
+
+            // Trim operands
+            auto trim_str = [](std::string& s) {
+                size_t start = s.find_first_not_of(" \t\n\r");
+                size_t end = s.find_last_not_of(" \t\n\r");
+                if (start != std::string::npos && end != std::string::npos) {
+                    s = s.substr(start, end - start + 1);
+                }
+            };
+            trim_str(left_str);
+            trim_str(right_str);
+
+            auto get_value = [&row](const std::string& operand) -> double {
+                // Check if it's a column reference
+                if (row.columns.find(operand) != row.columns.end()) {
+                    const auto& val = row.columns.at(operand);
+                    if (val.type() == typeid(int)) {
+                        return static_cast<double>(std::any_cast<int>(val));
+                    } else if (val.type() == typeid(float)) {
+                        return static_cast<double>(std::any_cast<float>(val));
+                    } else if (val.type() == typeid(double)) {
+                        return std::any_cast<double>(val);
+                    }
+                }
+                // Try to parse as numeric literal
+                try {
+                    return std::stod(operand);
+                } catch (...) {
+                    return 0.0;
+                }
+            };
+
+            double left_val = get_value(left_str);
+            double right_val = get_value(right_str);
+            double result = 0.0;
+
+            switch (found_op) {
+                case '+': result = left_val + right_val; break;
+                case '-': result = left_val - right_val; break;
+                case '*': result = left_val * right_val; break;
+                case '/':
+                    if (right_val != 0.0) {
+                        result = left_val / right_val;
+                    }
+                    break;
+            }
+
+            // Return as int if result is a whole number, otherwise as float
+            if (result == static_cast<int>(result)) {
+                return std::any(static_cast<int>(result));
+            }
+            return std::any(static_cast<float>(result));
+        };
+
+        // Check if any value is an expression that needs per-row evaluation
+        bool has_expression = false;
         for (const auto& [col_name, new_value] : parsed_query.set_values) {
-            update_data.columns.push_back(col_name);
-            update_data.new_value.columns[col_name] = new_value;
+            if (new_value.type() == typeid(std::string)) {
+                std::string value_str = std::any_cast<std::string>(new_value);
+                // Check if it contains arithmetic operators
+                if (value_str.find('+') != std::string::npos ||
+                    value_str.find('-') != std::string::npos ||
+                    value_str.find('*') != std::string::npos ||
+                    value_str.find('/') != std::string::npos) {
+                    has_expression = true;
+                    break;
+                }
+            }
         }
 
-        affected_rows = mdbms::sm::StorageEngine::get_instance().write_block(update_data);
+        if (has_expression && !rows_to_update.data.empty()) {
+            // Get table schema to find primary key
+            TableSchema schema = mdbms::sm::StorageEngine::get_instance().get_table_schema(table_name);
+            std::string primary_key = schema.primary_key;
+
+            if (primary_key.empty()) {
+                throw std::runtime_error("Cannot update with expressions: table '" + table_name +
+                                       "' has no primary key. Expressions require a primary key to identify rows.");
+            }
+
+            // Update each row individually with evaluated expressions
+            affected_rows = 0;
+            for (const auto& row : rows_to_update.data) {
+                DataWrite<Row> update_data;
+                update_data.table = table_name;
+                update_data.is_insert = false;
+
+                // Create condition to match this specific row using primary key
+                Condition pk_condition;
+                pk_condition.column = primary_key;
+                pk_condition.operation = "=";
+
+                // Get the primary key value from this row
+                if (row.columns.find(primary_key) != row.columns.end()) {
+                    pk_condition.operand = row.columns.at(primary_key);
+                } else {
+                    std::cerr << "QP: Warning: Primary key '" << primary_key << "' not found in row" << std::endl;
+                    continue;
+                }
+
+                update_data.conditions.push_back(pk_condition);
+
+                for (const auto& [col_name, new_value] : parsed_query.set_values) {
+                    update_data.columns.push_back(col_name);
+
+                    // Check if new_value is a string expression that needs evaluation
+                    std::any processed_value = new_value;
+                    if (new_value.type() == typeid(std::string)) {
+                        std::string value_str = std::any_cast<std::string>(new_value);
+                        processed_value = evaluate_expression(value_str, row);
+                    }
+
+                    update_data.new_value.columns[col_name] = processed_value;
+                }
+
+                int rows_updated = mdbms::sm::StorageEngine::get_instance().write_block(update_data);
+                affected_rows += rows_updated;
+            }
+        } else {
+            DataWrite<Row> update_data;
+            update_data.table = table_name;
+            update_data.conditions = parsed_query.where_conditions;
+            update_data.is_insert = false;
+
+            for (const auto& [col_name, new_value] : parsed_query.set_values) {
+                update_data.columns.push_back(col_name);
+                update_data.new_value.columns[col_name] = new_value;
+            }
+
+            affected_rows = mdbms::sm::StorageEngine::get_instance().write_block(update_data);
+        }
 
         std::cout << "QP: Updated " << affected_rows << " rows in " << table_name << std::endl;
 
