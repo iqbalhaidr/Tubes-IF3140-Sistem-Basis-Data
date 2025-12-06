@@ -328,6 +328,10 @@ bool test_apply_limit() {
     }
     std::cout << "  LIMIT 1: got " << limited.rows_count << " row [OK]" << std::endl;
     
+    // Show final LIMIT 5 result
+    std::cout << "\nResult of LIMIT 5:" << std::endl;
+    print_rows(qp.apply_limit(data, 5));
+    
     std::cout << "[PASS] apply_limit test" << std::endl;
     return true;
 }
@@ -360,6 +364,8 @@ bool test_apply_order_by_string_asc() {
         return false;
     }
     
+    print_rows(sorted);
+    
     std::cout << "[PASS] apply_order_by String ASC test" << std::endl;
     return true;
 }
@@ -391,6 +397,8 @@ bool test_apply_order_by_string_desc() {
         std::cerr << "[FAIL] Last should be Alice (DESC), got " << last << std::endl;
         return false;
     }
+    
+    print_rows(sorted);
     
     std::cout << "[PASS] apply_order_by String DESC test" << std::endl;
     return true;
@@ -428,6 +436,8 @@ bool test_apply_order_by_int_asc() {
         return false;
     }
     
+    print_rows(sorted);
+    
     std::cout << "[PASS] apply_order_by Integer ASC test" << std::endl;
     return true;
 }
@@ -459,6 +469,8 @@ bool test_apply_order_by_int_desc() {
         std::cerr << "[FAIL] Last StudentID should be 1 (DESC), got " << last << std::endl;
         return false;
     }
+    
+    print_rows(sorted);
     
     std::cout << "[PASS] apply_order_by Integer DESC test" << std::endl;
     return true;
@@ -493,6 +505,8 @@ bool test_apply_order_by_float_asc() {
         return false;
     }
     
+    print_rows(sorted);
+    
     std::cout << "[PASS] apply_order_by Float ASC test" << std::endl;
     return true;
 }
@@ -526,6 +540,8 @@ bool test_apply_order_by_float_desc() {
         return false;
     }
     
+    print_rows(sorted);
+    
     std::cout << "[PASS] apply_order_by Float DESC test" << std::endl;
     return true;
 }
@@ -555,6 +571,8 @@ bool test_apply_where_int_equals() {
         return false;
     }
     
+    print_rows(filtered);
+    
     std::cout << "[PASS] apply_where_clause INT = test" << std::endl;
     return true;
 }
@@ -578,6 +596,8 @@ bool test_apply_where_int_greater() {
         return false;
     }
     
+    print_rows(filtered);
+    
     std::cout << "[PASS] apply_where_clause INT > test" << std::endl;
     return true;
 }
@@ -600,6 +620,8 @@ bool test_apply_where_int_less() {
         std::cerr << "[FAIL] Expected 3 rows, got " << filtered.rows_count << std::endl;
         return false;
     }
+    
+    print_rows(filtered);
     
     std::cout << "[PASS] apply_where_clause INT < test" << std::endl;
     return true;
@@ -650,6 +672,8 @@ bool test_apply_where_float_less_equal() {
         return false;
     }
     
+    print_rows(filtered);
+    
     std::cout << "[PASS] apply_where_clause FLOAT <= test" << std::endl;
     return true;
 }
@@ -672,6 +696,8 @@ bool test_apply_where_string_equals() {
         std::cerr << "[FAIL] Expected 1 row, got " << filtered.rows_count << std::endl;
         return false;
     }
+    
+    print_rows(filtered);
     
     std::cout << "[PASS] apply_where_clause STRING = test" << std::endl;
     return true;
@@ -779,6 +805,8 @@ bool test_execute_join_cartesian() {
         std::cerr << "[FAIL] Expected 6 rows (3x2), got " << joined.rows_count << std::endl;
         return false;
     }
+    
+    print_rows(joined);
     
     std::cout << "[PASS] execute_join Cartesian Product test" << std::endl;
     return true;
@@ -1015,6 +1043,8 @@ bool test_where_not_equal() {
         }
     }
     
+    print_rows(filtered);
+    
     std::cout << "[PASS] apply_where_clause != test" << std::endl;
     return true;
 }
@@ -1038,6 +1068,8 @@ bool test_where_greater_equal() {
         std::cerr << "[FAIL] Expected 3 rows, got " << filtered.rows_count << std::endl;
         return false;
     }
+    
+    print_rows(filtered);
     
     std::cout << "[PASS] apply_where_clause >= test" << std::endl;
     return true;
