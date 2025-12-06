@@ -1,7 +1,6 @@
 #include <iostream>
 #include <fstream>
 #include <algorithm>
-#include <vector>
 #include <cctype>
 #include <sstream>
 #include <filesystem>
@@ -43,6 +42,12 @@ Operation determine_operation_type(const std::string& query) {
     if (first_word == "SELECT") {
         return Operation::COMMIT;
     }
+    if (first_word == "CREATE") {
+        return Operation::CREATE_TABLE;
+    }
+    if (first_word == "DROP") {
+        return Operation::DROP_TABLE;
+    }
 
     return Operation::BEGIN;
 }
@@ -53,11 +58,11 @@ FailureRecoveryManager& FailureRecoveryManager::get_instance() {
 }
 
 FailureRecoveryManager::FailureRecoveryManager() 
-    : storage_engine_(sm::StorageEngine::get_instance()) {
+    : running_(true) {
     this->next_log_id = 1;
     this->next_checkpoint_id = 1;
     // path untuk menyimpan log file
-    this->log_file_path = "../data/wal.bin";
+    this->log_file_path = "data/wal.bin";
     std::cout << "FRM: Konstruktor FailureRecoveryManager dipanggil..." << std::endl;
     std::cout << "FRM: Log file path: " << this->log_file_path << std::endl;
 
@@ -67,10 +72,23 @@ FailureRecoveryManager::FailureRecoveryManager()
     if (!existing.empty()) {
         this->next_log_id = existing.back().log_id + 1;
     }
+    
+    // Start periodic checkpoint thread
+    checkpoint_thread_ = std::thread(&FailureRecoveryManager::checkpoint_worker, this);
+    std::cout << "FRM: Periodic checkpoint thread started (interval: " 
+              << CHECKPOINT_INTERVAL_SECONDS << " seconds)" << std::endl;
 }
 
 FailureRecoveryManager::~FailureRecoveryManager() {
     std::cout << "FRM: Destruktor FailureRecoveryManager dipanggil..." << std::endl;
+    
+    // Stop checkpoint thread
+    running_ = false;
+    if (checkpoint_thread_.joinable()) {
+        checkpoint_thread_.join();
+        std::cout << "FRM: Periodic checkpoint thread stopped" << std::endl;
+    }
+    
     save_checkpoint();
     std::cout << "FRM: Checkpoint terakhir disimpan sebelum keluar..." << std::endl;
 }
@@ -129,6 +147,37 @@ void FailureRecoveryManager::write_log(const ExecutionResult& info) {
     } else if (entry.operation == Operation::COMMIT || entry.operation == Operation::ABORT) {
         this->active_transactions_cache.erase(entry.transaction_id);
         std::cout << "FRM: Transaksi " << entry.transaction_id << " selesai." << std::endl;
+    } else if (entry.operation == Operation::CREATE_TABLE) {
+        entry.table_name = info.table_name;
+        try {
+            TableSchema schema = sm::StorageEngine::get_instance().get_table_schema(entry.table_name);
+            entry.created_schema = schema;
+            std::cout << "FRM: Logging CREATE TABLE untuk table " 
+                      << entry.table_name << " (schema saved for recovery)" << std::endl;
+        } catch (const std::exception& e) {
+            std::cerr << "FRM Warning: Gagal mendapatkan schema untuk tabel yang dibuat: " 
+                      << entry.table_name << ". Error: " << e.what() << std::endl;
+            entry.created_schema = std::nullopt;
+        }
+    } else if (entry.operation == Operation::DROP_TABLE) {
+        entry.table_name = info.table_name;
+        auto it = pending_drop_schemas_.find(entry.table_name);
+        if (it != pending_drop_schemas_.end()) {
+            entry.dropped_schema = it->second;
+            pending_drop_schemas_.erase(it);
+            std::cout << "FRM: Logging DROP TABLE untuk table " 
+                    << entry.table_name << " (schema dari cache)" << std::endl;
+        } else {
+            try {
+                TableSchema schema = sm::StorageEngine::get_instance().get_table_schema(entry.table_name);
+                entry.dropped_schema = schema;
+                std::cout << "FRM: Logging DROP TABLE untuk table " 
+                        << entry.table_name << " (schema dari disk - fallback)" << std::endl;
+            } catch (const std::exception& e) {
+                std::cerr << "FRM Warning: Schema tidak tersedia: " << e.what() << std::endl;
+                entry.dropped_schema = std::nullopt;
+            }
+        }
     } else {
         // SELECT (Commit non-data): kosongkan field data
         entry.table_name.clear();
@@ -155,10 +204,96 @@ void FailureRecoveryManager::write_log(const ExecutionResult& info) {
               << std::endl;
 }
 
+void FailureRecoveryManager::commit_transaction(int transaction_id) {
+    std::lock_guard<std::mutex> lock(this->mtx);
+    
+    std::cout << "FRM: Committing transaction " << transaction_id << " with WAL protocol..." << std::endl;
+    
+    // tulis commit log entry ke buffer
+    LogEntry commit_entry;
+    commit_entry.log_id = this->next_log_id++;
+    commit_entry.transaction_id = transaction_id;
+    commit_entry.timestamp = std::time(nullptr);
+    commit_entry.operation = Operation::COMMIT;
+    commit_entry.query = "COMMIT";
+    this->log_buffer.push_back(commit_entry);
+    
+    // flush wal
+    std::cout << "FRM: Step 1 - Flushing WAL (COMMIT record to disk)..." << std::endl;
+    flush_buffer();
+    
+    // flush data
+    std::cout << "FRM: Step 2 - Flushing data pages to disk..." << std::endl;
+    sm::StorageEngine::get_instance().checkpoint();
+    
+    // apus active transaction
+    active_transactions_cache.erase(transaction_id);
+    
+    std::cout << "FRM: Transaction " << transaction_id << " committed successfully (WAL → Data)" << std::endl;
+}
+
+void FailureRecoveryManager::abort_transaction(int transaction_id) {
+    {
+        std::lock_guard<std::mutex> lock(this->mtx);
+        if (!active_transactions_cache.count(transaction_id)) {
+            std::cout << "FRM: Transaction " << transaction_id << " already finished/unknown, skipping abort." << std::endl;
+            return;
+        }
+    }
+
+    std::cout << "FRM: Aborting transaction " << transaction_id << "..." << std::endl;
+    
+    // clear buffer
+    // harusnya clear buffer hanya untuk transaksi yang diabort (tpi skrng masih clear semua)
+    std::cout << "FRM: Discarding uncommitted buffer pages..." << std::endl;
+    sm::StorageEngine::get_instance().clear_buffer_for_testing(); 
+    
+    // undo dari log untuk data yang sudah diflush ke disk
+    std::cout << "FRM: Performing UNDO from log..." << std::endl;
+    RecoverCriteria criteria;
+    criteria.transaction_id = transaction_id;
+    criteria.use_timestamp = false;
+    recover(criteria);
+    
+    // tulis abort log entry ke buffer
+    std::lock_guard<std::mutex> lock(this->mtx);
+    LogEntry abort_entry;
+    abort_entry.log_id = this->next_log_id++;
+    abort_entry.transaction_id = transaction_id;
+    abort_entry.timestamp = std::time(nullptr);
+    abort_entry.operation = Operation::ABORT;
+    abort_entry.query = "ABORT";
+    this->log_buffer.push_back(abort_entry);
+    flush_buffer();
+    
+    // apus active transaction
+    active_transactions_cache.erase(transaction_id);
+    
+    std::cout << "FRM: Transaction " << transaction_id << " aborted successfully" << std::endl;
+}
+
 void FailureRecoveryManager::save_checkpoint() {
     std::cout << "FRM: Menyimpan checkpoint..." << std::endl;
     std::lock_guard<std::mutex> lock(this->mtx);
+    
+    // flush wal
+    std::cout << "FRM: Step 1 - Flushing WAL buffer..." << std::endl;
     flush_buffer();
+    
+    // tulis checkpoint START log
+    LogEntry checkpoint_start;
+    checkpoint_start.log_id = this->next_log_id++;
+    checkpoint_start.transaction_id = -1;
+    checkpoint_start.timestamp = std::time(nullptr);
+    checkpoint_start.operation = Operation::CHECKPOINT;
+    checkpoint_start.table_name = "SYSTEM";
+    checkpoint_start.query = "CHECKPOINT_START";
+    this->log_buffer.push_back(checkpoint_start);
+    flush_buffer();  // Ensure checkpoint START on disk
+    
+    // flush data
+    std::cout << "FRM: Step 2 - Flushing data pages to disk..." << std::endl;
+    sm::StorageEngine::get_instance().checkpoint();
 
     // Menambahkan entri log untuk checkpoint
     LogEntry checkpoint_entry;
@@ -176,7 +311,7 @@ void FailureRecoveryManager::save_checkpoint() {
         first = false;
     }
     active_transactions_str += "]";
-    checkpoint_entry.query = "CHECKPOINT_L:" + active_transactions_str;
+    checkpoint_entry.query = "CHECKPOINT_END:" + active_transactions_str;
 
     this->log_buffer.push_back(checkpoint_entry);
     flush_buffer();
@@ -268,6 +403,8 @@ std::string FailureRecoveryManager::operation_to_string(Operation op) {
         case Operation::INSERT: return "INSERT";
         case Operation::DELETE: return "DELETE";
         case Operation::CHECKPOINT: return "CHECKPOINT";
+        case Operation::CREATE_TABLE: return "CREATE_TABLE";
+        case Operation::DROP_TABLE: return "DROP_TABLE";
         default: return "UNKNOWN";
     }
 }
@@ -378,6 +515,94 @@ Row FailureRecoveryManager::read_row(std::ifstream& in) {
     return row;
 }
 
+void FailureRecoveryManager::write_schema(std::ofstream& out, const TableSchema& schema) {
+    // 1. Table Name
+    write_string(out, schema.table_name);
+
+    // 2. Column Names
+    uint32_t col_count = static_cast<uint32_t>(schema.column_names.size());
+    out.write(reinterpret_cast<const char*>(&col_count), sizeof(col_count));
+    for (const auto& name : schema.column_names) {
+        write_string(out, name);
+    }
+
+    // 3. Column Types
+    // Ensure types size matches names size for consistency, though schema struct implies they should match
+    uint32_t type_count = static_cast<uint32_t>(schema.column_types.size());
+    out.write(reinterpret_cast<const char*>(&type_count), sizeof(type_count));
+    for (const auto& type : schema.column_types) {
+        int type_int = static_cast<int>(type);
+        out.write(reinterpret_cast<const char*>(&type_int), sizeof(type_int));
+    }
+
+    // 4. Column Sizes
+    uint32_t size_count = static_cast<uint32_t>(schema.column_sizes.size());
+    out.write(reinterpret_cast<const char*>(&size_count), sizeof(size_count));
+    for (int size : schema.column_sizes) {
+        out.write(reinterpret_cast<const char*>(&size), sizeof(size));
+    }
+
+    // 5. Primary Key
+    write_string(out, schema.primary_key);
+
+    // 6. Foreign Keys
+    uint32_t fk_count = static_cast<uint32_t>(schema.foreign_keys.size());
+    out.write(reinterpret_cast<const char*>(&fk_count), sizeof(fk_count));
+    for (const auto& [col, ref] : schema.foreign_keys) {
+        write_string(out, col);
+        write_string(out, ref);
+    }
+}
+
+TableSchema FailureRecoveryManager::read_schema(std::ifstream& in) {
+    TableSchema schema;
+
+    // 1. Table Name
+    schema.table_name = read_string(in);
+
+    // 2. Column Names
+    uint32_t col_count;
+    in.read(reinterpret_cast<char*>(&col_count), sizeof(col_count));
+    schema.column_names.resize(col_count);
+    for (uint32_t i = 0; i < col_count; ++i) {
+        schema.column_names[i] = read_string(in);
+    }
+
+    // 3. Column Types
+    uint32_t type_count;
+    in.read(reinterpret_cast<char*>(&type_count), sizeof(type_count));
+    schema.column_types.resize(type_count);
+    for (uint32_t i = 0; i < type_count; ++i) {
+        int type_int;
+        in.read(reinterpret_cast<char*>(&type_int), sizeof(type_int));
+        schema.column_types[i] = static_cast<DataType>(type_int);
+    }
+
+    // 4. Column Sizes
+    uint32_t size_count;
+    in.read(reinterpret_cast<char*>(&size_count), sizeof(size_count));
+    schema.column_sizes.resize(size_count);
+    for (uint32_t i = 0; i < size_count; ++i) {
+        int size;
+        in.read(reinterpret_cast<char*>(&size), sizeof(size));
+        schema.column_sizes[i] = size;
+    }
+
+    // 5. Primary Key
+    schema.primary_key = read_string(in);
+
+    // 6. Foreign Keys
+    uint32_t fk_count;
+    in.read(reinterpret_cast<char*>(&fk_count), sizeof(fk_count));
+    for (uint32_t i = 0; i < fk_count; ++i) {
+        std::string col = read_string(in);
+        std::string ref = read_string(in);
+        schema.foreign_keys[col] = ref;
+    }
+
+    return schema;
+}
+
 void FailureRecoveryManager::write_log_to_file(std::ofstream& out, const LogEntry& entry) {
     out.write(reinterpret_cast<const char*>(&entry.log_id), sizeof(entry.log_id));
     out.write(reinterpret_cast<const char*>(&entry.transaction_id), sizeof(entry.transaction_id));
@@ -404,6 +629,24 @@ void FailureRecoveryManager::write_log_to_file(std::ofstream& out, const LogEntr
     } else if (entry.operation == Operation::CHECKPOINT) {
         write_string(out, entry.table_name);
         write_string(out, entry.query);
+    } else if (entry.operation == Operation::CREATE_TABLE) {
+        write_string(out, entry.table_name);
+        write_string(out, entry.query);
+        
+        bool has_schema = entry.created_schema.has_value();
+        out.write(reinterpret_cast<const char*>(&has_schema), sizeof(has_schema));
+        if (has_schema) {
+            write_schema(out, entry.created_schema.value());
+        }
+    } else if (entry.operation == Operation::DROP_TABLE) {
+        write_string(out, entry.table_name);
+        write_string(out, entry.query);
+        
+        bool has_schema = entry.dropped_schema.has_value();
+        out.write(reinterpret_cast<const char*>(&has_schema), sizeof(has_schema));
+        if (has_schema) {
+            write_schema(out, entry.dropped_schema.value());
+        }
     }
 }
 
@@ -436,6 +679,24 @@ LogEntry FailureRecoveryManager::read_log_from_file(std::ifstream& in) {
     } else if (entry.operation == Operation::CHECKPOINT) {
         entry.table_name = read_string(in);
         entry.query = read_string(in);
+    } else if (entry.operation == Operation::CREATE_TABLE) {
+        entry.table_name = read_string(in);
+        entry.query = read_string(in);
+
+        bool has_schema;
+        in.read(reinterpret_cast<char*>(&has_schema), sizeof(has_schema));
+        if (has_schema) {
+            entry.created_schema = read_schema(in);
+        }
+    } else if (entry.operation == Operation::DROP_TABLE) {
+        entry.table_name = read_string(in);
+        entry.query = read_string(in);
+        
+        bool has_schema;
+        in.read(reinterpret_cast<char*>(&has_schema), sizeof(has_schema));
+        if (has_schema) {
+            entry.dropped_schema = read_schema(in);
+        }
     }
 
     return entry;
@@ -502,6 +763,45 @@ std::string FailureRecoveryManager::row_to_string(const Row& row) {
     return oss.str();
 }
 
+std::string FailureRecoveryManager::schema_to_string(const TableSchema& schema) {
+    std::ostringstream oss;
+    oss << "{Table:" << schema.table_name << ", PK:" << schema.primary_key << ", Cols:[";
+    
+    for (size_t i = 0; i < schema.column_names.size(); ++i) {
+        if (i > 0) oss << "; ";
+        oss << schema.column_names[i] << "(";
+        
+        if (i < schema.column_types.size()) {
+            switch (schema.column_types[i]) {
+                case DataType::INTEGER: oss << "INT"; break;
+                case DataType::FLOAT: oss << "FLOAT"; break;
+                case DataType::CHAR: oss << "CHAR"; break;
+                case DataType::VARCHAR: oss << "VARCHAR"; break;
+                default: oss << "UNK"; break;
+            }
+        }
+        
+        if (i < schema.column_sizes.size() && schema.column_sizes[i] > 0) {
+             oss << ":" << schema.column_sizes[i];
+        }
+        oss << ")";
+    }
+    oss << "]";
+
+    if (!schema.foreign_keys.empty()) {
+        oss << ", FKs:[";
+        bool first = true;
+        for (const auto& [col, ref] : schema.foreign_keys) {
+            if (!first) oss << "; ";
+            oss << col << "->" << ref;
+            first = false;
+        }
+        oss << "]";
+    }
+    oss << "}";
+    return oss.str();
+}
+
 std::string FailureRecoveryManager::sanitize_for_log(std::string input) {
     // Ganti newline dengan spasi agar tetap 1 baris
     std::replace(input.begin(), input.end(), '\n', ' ');
@@ -544,6 +844,20 @@ void FailureRecoveryManager::write_log_to_text_file(std::ofstream& out, const Lo
         // Query di checkpoint berisi list active transactions
         out << " | Info:" << sanitize_for_log(entry.query); 
     }
+    else if (entry.operation == Operation::CREATE_TABLE) {
+        if (entry.created_schema.has_value()) {
+            out << " | Schema:" << schema_to_string(entry.created_schema.value());
+        } else {
+            out << " | Schema:NULL";
+        }
+    }
+    else if (entry.operation == Operation::DROP_TABLE) {
+        if (entry.dropped_schema.has_value()) {
+            out << " | BackupSchema:" << schema_to_string(entry.dropped_schema.value());
+        } else {
+            out << " | BackupSchema:NULL";
+        }
+    }
 
     // 4. Tulis Query (Kecuali Checkpoint yang sudah ditulis di atas)
     // Pastikan query disanitasi agar tidak ada newline
@@ -560,25 +874,7 @@ void FailureRecoveryManager::write_log_to_text_file(std::ofstream& out, const Lo
 // ===============================================================================================================================================
 
 std::vector<Condition> FailureRecoveryManager::row_to_conditions(const Row& row, const std::string& table_name) {
-    std::vector<Condition> conditions;
-    
-    // Use primary key columns to identify the row
-    // Common primary key column names
-    std::vector<std::string> pk_columns = {"StudentID", "CourseID", "id"};
-    
-    for (const auto& pk_col : pk_columns) {
-        if (row.columns.find(pk_col) != row.columns.end()) {
-            Condition cond;
-            cond.column = pk_col;
-            cond.operation = "=";
-            cond.operand = row.columns.at(pk_col);
-            conditions.push_back(cond);
-            std::cout << "FRM: Using '" << pk_col << "' as identifying condition" << std::endl;
-            break; // Only need one primary key
-        }
-    }
-    
-    return conditions;
+    return sm::StorageEngine::get_instance().row_to_conditions(row, table_name);
 }
 
 std::any FailureRecoveryManager::string_to_any(const std::string& str) {
@@ -653,7 +949,7 @@ bool FailureRecoveryManager::undo_operation(const LogEntry& entry) {
                 deletion.table = entry.table_name;
                 deletion.conditions = conditions;
                 
-                int deleted = storage_engine_.delete_block(deletion);
+                int deleted = sm::StorageEngine::get_instance().delete_block(deletion);
                 std::cout << "FRM: Berhasil menghapus " << deleted << " row" << std::endl;
                 
                 return deleted > 0;
@@ -670,7 +966,7 @@ bool FailureRecoveryManager::undo_operation(const LogEntry& entry) {
                 write.new_value = entry.old_value;
                 write.is_insert = true;
                 
-                int inserted = storage_engine_.write_block(write);
+                int inserted = sm::StorageEngine::get_instance().write_block(write);
                 std::cout << "FRM: Berhasil mengembalikan " << inserted << " row" << std::endl;
                 
                 return inserted > 0;
@@ -696,10 +992,40 @@ bool FailureRecoveryManager::undo_operation(const LogEntry& entry) {
                 write.conditions = conditions;
                 write.is_insert = false;
                 
-                int updated = storage_engine_.write_block(write);
+                int updated = sm::StorageEngine::get_instance().write_block(write);
                 std::cout << "FRM: Berhasil mengembalikan " << updated << " row ke nilai lama" << std::endl;
                 
                 return updated > 0;
+            }
+
+            case Operation::CREATE_TABLE: {
+                std::cout << "FRM: UNDO CREATE_TABLE - Menghapus tabel " << entry.table_name << std::endl;
+                
+                bool dropped = sm::StorageEngine::get_instance().drop_table(entry.table_name);
+                if (dropped) {
+                    std::cout << "FRM: Tabel " << entry.table_name << " berhasil dihapus." << std::endl;
+                } else {
+                    std::cerr << "FRM Error: Gagal menghapus tabel " << entry.table_name << std::endl;
+                }
+                return dropped;
+            }
+
+            case Operation::DROP_TABLE: {
+                std::cout << "FRM: UNDO DROP_TABLE - Mengembalikan tabel " << entry.table_name << std::endl;
+                
+                if (!entry.dropped_schema.has_value()) {
+                    std::cerr << "FRM Error: Skema untuk tabel " << entry.table_name << " tidak tersedia, tidak dapat mengembalikan tabel." << std::endl;
+                    return false;
+                }
+
+                const TableSchema& schema = entry.dropped_schema.value();
+                bool created = sm::StorageEngine::get_instance().create_table(schema);
+                if (created) {
+                    std::cout << "FRM: Tabel " << entry.table_name << " berhasil dikembalikan." << std::endl;
+                } else {
+                    std::cerr << "FRM Error: Gagal mengembalikan tabel " << entry.table_name << std::endl;
+                }
+                return created;
             }
             
             default:
@@ -727,7 +1053,7 @@ bool FailureRecoveryManager::redo_operation(const LogEntry& entry) {
                 write.table = entry.table_name;
                 write.new_value = entry.new_value;
                 write.is_insert = true;
-                storage_engine_.write_block(write);
+                sm::StorageEngine::get_instance().write_block(write);
                 return true;
             }
             case Operation::DELETE: {
@@ -745,7 +1071,7 @@ bool FailureRecoveryManager::redo_operation(const LogEntry& entry) {
                 DataDeletion deletion;
                 deletion.table = entry.table_name;
                 deletion.conditions = conditions;
-                storage_engine_.delete_block(deletion);
+                sm::StorageEngine::get_instance().delete_block(deletion);
                 return true;
             }
             case Operation::UPDATE: {
@@ -765,9 +1091,47 @@ bool FailureRecoveryManager::redo_operation(const LogEntry& entry) {
                 write.new_value = entry.new_value;
                 write.conditions = conditions;
                 write.is_insert = false;
-                storage_engine_.write_block(write);
+                sm::StorageEngine::get_instance().write_block(write);
                 return true;
             }
+
+            case Operation::CREATE_TABLE: {
+                std::cout << "FRM: REDO CREATE_TABLE - Membuat tabel " << entry.table_name << std::endl;
+
+                if (!entry.created_schema.has_value()) {
+                    std::cerr << "FRM Error: Schema untuk tabel " << entry.table_name 
+                            << " tidak tersedia untuk REDO CREATE." << std::endl;
+                    
+                    std::cout << "FRM: Melewati REDO CREATE (schema tidak tersimpan, "
+                            << "table mungkin sudah ada)" << std::endl;
+                    return true;
+                }
+
+                const TableSchema& schema = entry.created_schema.value();
+                bool created = sm::StorageEngine::get_instance().create_table(schema);
+                
+                if (created) {
+                    std::cout << "FRM: Tabel " << entry.table_name << " berhasil dibuat." << std::endl;
+                } else {
+                    std::cout << "FRM: Tabel " << entry.table_name 
+                            << " mungkin sudah ada, melewati REDO CREATE." << std::endl;
+                }
+                
+                return true;
+            }
+
+            case Operation::DROP_TABLE: {
+                std::cout << "FRM: REDO DROP_TABLE - Menghapus tabel " << entry.table_name << std::endl;
+
+                bool dropped = sm::StorageEngine::get_instance().drop_table(entry.table_name);
+                if (dropped) {
+                    std::cout << "FRM: Tabel " << entry.table_name << " berhasil dihapus." << std::endl;
+                } else {
+                    std::cerr << "FRM Error: Gagal menghapus tabel " << entry.table_name << std::endl;
+                }
+                return dropped;
+            }
+
             default:
                 std::cerr << "FRM Error: Operasi " << operation_to_string(entry.operation) 
                           << " tidak dapat di-REDO" << std::endl;
@@ -845,7 +1209,9 @@ void FailureRecoveryManager::recover_from_crash() {
             if (committed_txs.count(entry.transaction_id) && 
                 (entry.operation == Operation::INSERT || 
                  entry.operation == Operation::UPDATE || 
-                 entry.operation == Operation::DELETE)) {
+                 entry.operation == Operation::DELETE || 
+                 entry.operation == Operation::CREATE_TABLE ||
+                 entry.operation == Operation::DROP_TABLE)) {
                 
                 std::cout << "FRM: REDO T" << entry.transaction_id << " - " 
                           << operation_to_string(entry.operation) 
@@ -879,8 +1245,9 @@ void FailureRecoveryManager::recover_from_crash() {
                 } 
                 else if (entry.operation == Operation::INSERT || 
                          entry.operation == Operation::UPDATE || 
-                         entry.operation == Operation::DELETE) {
-                    
+                         entry.operation == Operation::DELETE ||
+                         entry.operation == Operation::CREATE_TABLE ||
+                         entry.operation == Operation::DROP_TABLE) {
                     std::cout << "FRM: UNDO T" << entry.transaction_id << " - " 
                               << operation_to_string(entry.operation) 
                               << " pada tabel " << entry.table_name 
@@ -912,7 +1279,7 @@ void FailureRecoveryManager::flush_buffer() {
         return;
     }
 
-    std::string text_log_path = "../data/wal.log";
+    std::string text_log_path = "data/wal.log";
     std::ofstream text_file(text_log_path, std::ios::app);
 
     for (const auto& entry : this->log_buffer) {
@@ -942,6 +1309,45 @@ void FailureRecoveryManager::reset_state_for_testing() {
     this->next_log_id = 1;
     this->next_checkpoint_id = 1;
     std::cout << "[TEST] FailureRecoveryManager state reset" << std::endl;
+}
+
+void FailureRecoveryManager::checkpoint_worker() {
+    std::cout << "FRM: Checkpoint worker thread started" << std::endl;
+    
+    while (running_) {
+        // Sleep in small intervals to allow quick shutdown
+        for (int i = 0; i < CHECKPOINT_INTERVAL_SECONDS && running_; i++) {
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+        }
+        
+        if (running_) {
+            std::cout << "\nFRM: [PERIODIC] Triggering automatic checkpoint..." << std::endl;
+            try {
+                save_checkpoint();
+                std::cout << "FRM: [PERIODIC] Automatic checkpoint completed" << std::endl;
+            } catch (const std::exception& e) {
+                std::cerr << "FRM Error: Periodic checkpoint failed - " << e.what() << std::endl;
+            }
+        }
+    }
+    
+    std::cout << "FRM: Checkpoint worker thread exiting" << std::endl;
+}
+
+void FailureRecoveryManager::prepare_ddl_operation(const std::string& table_name, Operation op) {
+    std::lock_guard<std::mutex> lock(this->mtx);
+    
+    if (op == Operation::DROP_TABLE) {
+        try {
+            TableSchema schema = sm::StorageEngine::get_instance().get_table_schema(table_name);
+            pending_drop_schemas_[table_name] = schema;
+            std::cout << "FRM: Schema untuk DROP TABLE " << table_name 
+                      << " disimpan di cache." << std::endl;
+        } catch (const std::exception& e) {
+            std::cerr << "FRM Warning: Gagal backup schema untuk " << table_name 
+                      << ": " << e.what() << std::endl;
+        }
+    }
 }
 
 } // namespace mdbms::fr

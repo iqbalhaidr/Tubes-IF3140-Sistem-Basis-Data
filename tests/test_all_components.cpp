@@ -111,7 +111,9 @@ void print_query_tree(const mdbms::qo::QueryTree* node,
 
 bool test_storage_manager_round_trip() {
     ScopedDataDir dir("sm_round_trip");
-    mdbms::sm::StorageEngine storage(dir.str());
+    // Note: StorageEngine is a singleton - using default instance
+    // Custom directory testing would require additional singleton management
+    auto& storage = mdbms::sm::StorageEngine::get_instance();
 
     insert_student(storage, 101, "Alice", 3.75f);
     insert_student(storage, 102, "Bob", 3.20f);
@@ -172,7 +174,7 @@ bool test_storage_manager_round_trip() {
 }
 
 bool test_query_optimizer_pipeline() {
-    mdbms::qo::OptimizationEngine optimizer;
+    auto& optimizer = mdbms::qo::OptimizationEngine::get_instance();
     const std::string query =
         "SELECT StudentID, FullName FROM Student WHERE GPA >= 3.5 AND StudentID > 10";
 

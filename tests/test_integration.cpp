@@ -18,9 +18,9 @@ void insert_test_data(mdbms::sm::StorageEngine& storage, const std::string& tabl
     insert.is_insert = true;
     insert.new_value.table_name = table;
     insert.new_value.columns = {
-        {"StudentID", id},
-        {"FullName", name},
-        {"GPA", gpa}
+        {"id", id},      // Match schema: lowercase
+        {"name", name},  // Match schema: lowercase
+        {"gpa", gpa}     // Match schema: lowercase
     };
     storage.write_block(insert);
 }
@@ -32,6 +32,10 @@ public:
     std::unique_ptr<mdbms::qp::QueryProcessor> qp;
 
     IntegrationTestSetup(const std::string& dir) : test_dir(dir) {
+        // Clear buffer pool from previous test
+        auto& storage = mdbms::sm::StorageEngine::get_instance();
+        storage.clear_buffer_for_testing();
+        
         std::filesystem::create_directory(test_dir);
         // All components are singletons, QueryProcessor uses get_instance() for all
         qp = std::make_unique<mdbms::qp::QueryProcessor>();
@@ -352,8 +356,8 @@ bool test_full_workflow() {
     mdbms::qo::ParsedQuery update_query;
     update_query.query_type = "UPDATE";
     update_query.from_tables.push_back("Student");
-    update_query.set_values["GPA"] = 4.0f;
-    update_query.where_conditions.push_back(mdbms::Condition("StudentID", "=", 1));
+    update_query.set_values["gpa"] = 4.0f;
+    update_query.where_conditions.push_back(mdbms::Condition("id", "=", 1));
     
     int update_txn = setup.qp->begin_transaction();
     int affected = setup.qp->execute_update(update_query, update_txn);
@@ -371,7 +375,7 @@ bool test_full_workflow() {
     verify_query.query_type = "SELECT";
     verify_query.select_columns = {"*"};
     verify_query.from_tables.push_back("Student");
-    verify_query.where_conditions.push_back(mdbms::Condition("StudentID", "=", 1));
+    verify_query.where_conditions.push_back(mdbms::Condition("id", "=", 1));
     
     int verify_txn = setup.qp->begin_transaction();
     auto verify_result = setup.qp->execute_select(verify_query, verify_txn);
@@ -384,7 +388,7 @@ bool test_full_workflow() {
     
     // Verify the GPA was actually updated
     if (!verify_result.data.empty()) {
-        float gpa = std::any_cast<float>(verify_result.data[0].columns.at("GPA"));
+        float gpa = std::any_cast<float>(verify_result.data[0].columns.at("gpa"));
         if (gpa != 4.0f) {
             std::cerr << "[FAIL] GPA not updated correctly, expected 4.0, got " << gpa << std::endl;
             return false;
@@ -509,8 +513,8 @@ bool test_failure_recovery_integration() {
     mdbms::qo::ParsedQuery update_query;
     update_query.query_type = "UPDATE";
     update_query.from_tables.push_back("Student");
-    update_query.set_values["GPA"] = 4.0f;
-    update_query.where_conditions.push_back(mdbms::Condition("StudentID", "=", 1));
+    update_query.set_values["gpa"] = 4.0f;
+    update_query.where_conditions.push_back(mdbms::Condition("id", "=", 1));
     
     int update_txn = setup.qp->begin_transaction();
     int affected = setup.qp->execute_update(update_query, update_txn);
@@ -567,8 +571,8 @@ bool test_failure_recovery_integration() {
     mdbms::qo::ParsedQuery update_query2;
     update_query2.query_type = "UPDATE";
     update_query2.from_tables.push_back("Student");
-    update_query2.set_values["GPA"] = 3.9f;
-    update_query2.where_conditions.push_back(mdbms::Condition("StudentID", "=", 2));
+    update_query2.set_values["gpa"] = 3.9f;
+    update_query2.where_conditions.push_back(mdbms::Condition("id", "=", 2));
     setup.qp->execute_update(update_query2, abort_txn);
     
     std::ostringstream captured_output5;

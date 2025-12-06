@@ -124,7 +124,32 @@ void parse_select_query(const std::string& query, ParsedQuery& pq) {
     if (columns.empty()) {
         columns.push_back("*");
     }
-    pq.select_columns = columns;
+    
+    pq.select_columns.clear();
+    pq.select_aliases.clear();
+
+    for (const auto& col_str : columns) {
+        auto tokens = tokenize(col_str);
+        bool has_alias = false;
+        
+        if (tokens.size() >= 3) {
+            std::string second_last = to_upper(tokens[tokens.size() - 2]);
+            if (second_last == "AS") {
+                std::string alias = tokens.back();
+                std::vector<std::string> expr_tokens(tokens.begin(), tokens.end() - 2);
+                std::string expression = join_tokens(expr_tokens);
+                
+                pq.select_columns.push_back(expression);
+                pq.select_aliases.push_back(alias);
+                has_alias = true;
+            }
+        }
+        
+        if (!has_alias) {
+            pq.select_columns.push_back(col_str);
+            pq.select_aliases.push_back(col_str); 
+        }
+    }
 
     size_t where_pos = upper.find("WHERE", from_pos);
     size_t order_pos = upper.find("ORDER BY", from_pos);
