@@ -93,10 +93,11 @@ struct Condition {
     std::string column;
     std::string operation;
     std::any operand;
+    std::string logical_operator;  // AND or OR
 
-    Condition() = default;
+    Condition() : logical_operator("AND") {}
     Condition(const std::string& col, const std::string& op, const std::any& val)
-        : column(col), operation(op), operand(val) {}
+        : column(col), operation(op), operand(val), logical_operator("AND") {}
 };
 
 struct DataRetrieval {
