@@ -1608,14 +1608,507 @@ bool test_table_alias_with_aliased_column_ref() {
     return true;
 }
 
+// ============================================================================
+// Integration Tests using execute_query() with SQL strings
+// ============================================================================
+
+class IntegrationTestSetup {
+public:
+    mdbms::qp::QueryProcessor qp;
+    
+    IntegrationTestSetup() {
+        cleanup();
+    }
+    
+    ~IntegrationTestSetup() {
+        cleanup();
+    }
+    
+    void cleanup() {
+        try { qp.execute_query("DROP TABLE IntegStudent;"); } catch (...) {}
+        try { qp.execute_query("DROP TABLE IntegCourse;"); } catch (...) {}
+        try { qp.execute_query("DROP TABLE IntegDepartment;"); } catch (...) {}
+    }
+};
+
+void print_execution_result(const mdbms::ExecutionResult& result) {
+    std::cout << "  Success: " << (result.success ? "YES" : "NO") << "\n";
+    std::cout << "  Message: " << result.message << "\n";
+    std::cout << "  Affected rows: " << result.affected_rows << "\n";
+    if (!result.data.data.empty()) {
+        print_rows(result.data);
+    }
+}
+
+bool test_integration_create_table() {
+    std::cout << "\n=== TEST 29: Integration - CREATE TABLE ===" << std::endl;
+    IntegrationTestSetup env;
+    
+    std::string sql = "CREATE TABLE IntegStudent (StudentID INTEGER PRIMARY KEY, Name VARCHAR(50), GPA FLOAT);";
+    std::cout << "  SQL: " << sql << "\n";
+    
+    auto result = env.qp.execute_query(sql);
+    print_execution_result(result);
+    
+    if (!result.success) {
+        std::cerr << "[FAIL] CREATE TABLE failed\n";
+        return false;
+    }
+    
+    std::cout << "[PASS] Integration - CREATE TABLE\n";
+    return true;
+}
+
+bool test_integration_insert_single_row() {
+    std::cout << "\n=== TEST 30: Integration - INSERT single row ===" << std::endl;
+    IntegrationTestSetup env;
+    
+    env.qp.execute_query("CREATE TABLE IntegStudent (StudentID INTEGER PRIMARY KEY, Name VARCHAR(50), GPA FLOAT);");
+    
+    std::string sql = "INSERT INTO IntegStudent (StudentID, Name, GPA) VALUES (1, 'Alice', 3.8);";
+    std::cout << "  SQL: " << sql << "\n";
+    
+    auto result = env.qp.execute_query(sql);
+    print_execution_result(result);
+    
+    if (!result.success || result.affected_rows != 1) {
+        std::cerr << "[FAIL] INSERT single row failed\n";
+        return false;
+    }
+    
+    std::cout << "[PASS] Integration - INSERT single row\n";
+    return true;
+}
+
+bool test_integration_insert_multiple_rows() {
+    std::cout << "\n=== TEST 31: Integration - INSERT multiple rows ===" << std::endl;
+    IntegrationTestSetup env;
+    
+    env.qp.execute_query("CREATE TABLE IntegStudent (StudentID INTEGER PRIMARY KEY, Name VARCHAR(50), GPA FLOAT);");
+    
+    std::vector<std::string> inserts = {
+        "INSERT INTO IntegStudent (StudentID, Name, GPA) VALUES (1, 'Alice', 3.8);",
+        "INSERT INTO IntegStudent (StudentID, Name, GPA) VALUES (2, 'Bob', 3.2);",
+        "INSERT INTO IntegStudent (StudentID, Name, GPA) VALUES (3, 'Charlie', 3.5);"
+    };
+    
+    for (const auto& sql : inserts) {
+        std::cout << "  SQL: " << sql << "\n";
+        auto result = env.qp.execute_query(sql);
+        if (!result.success) {
+            std::cerr << "[FAIL] INSERT failed: " << result.message << "\n";
+            return false;
+        }
+    }
+    
+    auto select_result = env.qp.execute_query("SELECT * FROM IntegStudent;");
+    print_execution_result(select_result);
+    
+    if (select_result.data.rows_count != 3) {
+        std::cerr << "[FAIL] Expected 3 rows, got " << select_result.data.rows_count << "\n";
+        return false;
+    }
+    
+    std::cout << "[PASS] Integration - INSERT multiple rows\n";
+    return true;
+}
+
+bool test_integration_insert_pk_violation() {
+    std::cout << "\n=== TEST 32: Integration - INSERT primary key violation ===" << std::endl;
+    IntegrationTestSetup env;
+    
+    env.qp.execute_query("CREATE TABLE IntegStudent (StudentID INTEGER PRIMARY KEY, Name VARCHAR(50), GPA FLOAT);");
+    env.qp.execute_query("INSERT INTO IntegStudent (StudentID, Name, GPA) VALUES (1, 'Alice', 3.8);");
+    
+    std::string sql = "INSERT INTO IntegStudent (StudentID, Name, GPA) VALUES (1, 'Bob', 3.2);";
+    std::cout << "  SQL: " << sql << "\n";
+    std::cout << "  (Expecting failure due to duplicate primary key)\n";
+    
+    auto result = env.qp.execute_query(sql);
+    print_execution_result(result);
+    
+    if (result.success) {
+        std::cerr << "[FAIL] INSERT should have failed due to duplicate primary key\n";
+        return false;
+    }
+    
+    std::cout << "[PASS] Integration - INSERT primary key violation detected\n";
+    return true;
+}
+
+bool test_integration_select_all() {
+    std::cout << "\n=== TEST 33: Integration - SELECT * ===" << std::endl;
+    IntegrationTestSetup env;
+    
+    env.qp.execute_query("CREATE TABLE IntegStudent (StudentID INTEGER PRIMARY KEY, Name VARCHAR(50), GPA FLOAT);");
+    env.qp.execute_query("INSERT INTO IntegStudent (StudentID, Name, GPA) VALUES (1, 'Alice', 3.8);");
+    env.qp.execute_query("INSERT INTO IntegStudent (StudentID, Name, GPA) VALUES (2, 'Bob', 3.2);");
+    
+    std::string sql = "SELECT * FROM IntegStudent;";
+    std::cout << "  SQL: " << sql << "\n";
+    
+    auto result = env.qp.execute_query(sql);
+    print_execution_result(result);
+    
+    if (!result.success || result.data.rows_count != 2) {
+        std::cerr << "[FAIL] SELECT * failed\n";
+        return false;
+    }
+    
+    std::cout << "[PASS] Integration - SELECT *\n";
+    return true;
+}
+
+bool test_integration_select_with_where() {
+    std::cout << "\n=== TEST 34: Integration - SELECT with WHERE ===" << std::endl;
+    IntegrationTestSetup env;
+    
+    env.qp.execute_query("CREATE TABLE IntegStudent (StudentID INTEGER PRIMARY KEY, Name VARCHAR(50), GPA FLOAT);");
+    env.qp.execute_query("INSERT INTO IntegStudent (StudentID, Name, GPA) VALUES (1, 'Alice', 3.8);");
+    env.qp.execute_query("INSERT INTO IntegStudent (StudentID, Name, GPA) VALUES (2, 'Bob', 3.2);");
+    env.qp.execute_query("INSERT INTO IntegStudent (StudentID, Name, GPA) VALUES (3, 'Charlie', 3.5);");
+    env.qp.execute_query("INSERT INTO IntegStudent (StudentID, Name, GPA) VALUES (4, 'Diana', 2.9);");
+    
+    std::string sql = "SELECT * FROM IntegStudent WHERE GPA > 3.3;";
+    std::cout << "  SQL: " << sql << "\n";
+    
+    auto result = env.qp.execute_query(sql);
+    print_execution_result(result);
+    
+    if (!result.success || result.data.rows_count != 2) {
+        std::cerr << "[FAIL] Expected 2 rows with GPA > 3.3, got " << result.data.rows_count << "\n";
+        return false;
+    }
+    
+    std::cout << "[PASS] Integration - SELECT with WHERE\n";
+    return true;
+}
+
+bool test_integration_select_with_order_by() {
+    std::cout << "\n=== TEST 35: Integration - SELECT with ORDER BY ===" << std::endl;
+    IntegrationTestSetup env;
+    
+    env.qp.execute_query("CREATE TABLE IntegStudent (StudentID INTEGER PRIMARY KEY, Name VARCHAR(50), GPA FLOAT);");
+    env.qp.execute_query("INSERT INTO IntegStudent (StudentID, Name, GPA) VALUES (1, 'Alice', 3.8);");
+    env.qp.execute_query("INSERT INTO IntegStudent (StudentID, Name, GPA) VALUES (2, 'Bob', 3.2);");
+    env.qp.execute_query("INSERT INTO IntegStudent (StudentID, Name, GPA) VALUES (3, 'Charlie', 3.5);");
+    
+    std::string sql = "SELECT * FROM IntegStudent ORDER BY GPA DESC;";
+    std::cout << "  SQL: " << sql << "\n";
+    
+    auto result = env.qp.execute_query(sql);
+    print_execution_result(result);
+    
+    if (!result.success || result.data.rows_count != 3) {
+        std::cerr << "[FAIL] SELECT with ORDER BY failed\n";
+        return false;
+    }
+    
+    if (result.data.data[0].columns.count("Name")) {
+        std::string first_name = std::any_cast<std::string>(result.data.data[0].columns.at("Name"));
+        if (first_name != "Alice") {
+            std::cerr << "[FAIL] First row should be Alice (highest GPA), got " << first_name << "\n";
+            return false;
+        }
+    }
+    
+    std::cout << "[PASS] Integration - SELECT with ORDER BY\n";
+    return true;
+}
+
+bool test_integration_select_with_limit() {
+    std::cout << "\n=== TEST 36: Integration - SELECT with LIMIT ===" << std::endl;
+    IntegrationTestSetup env;
+    
+    env.qp.execute_query("CREATE TABLE IntegStudent (StudentID INTEGER PRIMARY KEY, Name VARCHAR(50), GPA FLOAT);");
+    env.qp.execute_query("INSERT INTO IntegStudent (StudentID, Name, GPA) VALUES (1, 'Alice', 3.8);");
+    env.qp.execute_query("INSERT INTO IntegStudent (StudentID, Name, GPA) VALUES (2, 'Bob', 3.2);");
+    env.qp.execute_query("INSERT INTO IntegStudent (StudentID, Name, GPA) VALUES (3, 'Charlie', 3.5);");
+    env.qp.execute_query("INSERT INTO IntegStudent (StudentID, Name, GPA) VALUES (4, 'Diana', 2.9);");
+    
+    std::string sql = "SELECT * FROM IntegStudent LIMIT 2;";
+    std::cout << "  SQL: " << sql << "\n";
+    
+    auto result = env.qp.execute_query(sql);
+    print_execution_result(result);
+    
+    if (!result.success || result.data.rows_count != 2) {
+        std::cerr << "[FAIL] Expected 2 rows with LIMIT 2, got " << result.data.rows_count << "\n";
+        return false;
+    }
+    
+    std::cout << "[PASS] Integration - SELECT with LIMIT\n";
+    return true;
+}
+
+bool test_integration_select_combined() {
+    std::cout << "\n=== TEST 37: Integration - SELECT with WHERE + ORDER BY + LIMIT ===" << std::endl;
+    IntegrationTestSetup env;
+    
+    env.qp.execute_query("CREATE TABLE IntegStudent (StudentID INTEGER PRIMARY KEY, Name VARCHAR(50), GPA FLOAT);");
+    env.qp.execute_query("INSERT INTO IntegStudent (StudentID, Name, GPA) VALUES (1, 'Alice', 3.8);");
+    env.qp.execute_query("INSERT INTO IntegStudent (StudentID, Name, GPA) VALUES (2, 'Bob', 3.2);");
+    env.qp.execute_query("INSERT INTO IntegStudent (StudentID, Name, GPA) VALUES (3, 'Charlie', 3.5);");
+    env.qp.execute_query("INSERT INTO IntegStudent (StudentID, Name, GPA) VALUES (4, 'Diana', 2.9);");
+    env.qp.execute_query("INSERT INTO IntegStudent (StudentID, Name, GPA) VALUES (5, 'Eve', 3.6);");
+    
+    std::string sql = "SELECT * FROM IntegStudent WHERE GPA > 3.0 ORDER BY GPA DESC LIMIT 2;";
+    std::cout << "  SQL: " << sql << "\n";
+    
+    auto result = env.qp.execute_query(sql);
+    print_execution_result(result);
+    
+    if (!result.success || result.data.rows_count != 2) {
+        std::cerr << "[FAIL] Expected 2 rows, got " << result.data.rows_count << "\n";
+        return false;
+    }
+    
+    std::cout << "[PASS] Integration - SELECT with WHERE + ORDER BY + LIMIT\n";
+    return true;
+}
+
+bool test_integration_update_single_row() {
+    std::cout << "\n=== TEST 38: Integration - UPDATE single row ===" << std::endl;
+    IntegrationTestSetup env;
+    
+    env.qp.execute_query("CREATE TABLE IntegStudent (StudentID INTEGER PRIMARY KEY, Name VARCHAR(50), GPA FLOAT);");
+    env.qp.execute_query("INSERT INTO IntegStudent (StudentID, Name, GPA) VALUES (1, 'Alice', 3.8);");
+    env.qp.execute_query("INSERT INTO IntegStudent (StudentID, Name, GPA) VALUES (2, 'Bob', 3.2);");
+    
+    std::string sql = "UPDATE IntegStudent SET GPA = 4.0 WHERE StudentID = 1;";
+    std::cout << "  SQL: " << sql << "\n";
+    
+    auto result = env.qp.execute_query(sql);
+    print_execution_result(result);
+    
+    if (!result.success || result.affected_rows != 1) {
+        std::cerr << "[FAIL] UPDATE should affect 1 row\n";
+        return false;
+    }
+    
+    auto verify = env.qp.execute_query("SELECT * FROM IntegStudent WHERE StudentID = 1;");
+    print_execution_result(verify);
+    
+    std::cout << "[PASS] Integration - UPDATE single row\n";
+    return true;
+}
+
+bool test_integration_update_multiple_rows() {
+    std::cout << "\n=== TEST 39: Integration - UPDATE multiple rows ===" << std::endl;
+    IntegrationTestSetup env;
+    
+    env.qp.execute_query("CREATE TABLE IntegStudent (StudentID INTEGER PRIMARY KEY, Name VARCHAR(50), GPA FLOAT);");
+    env.qp.execute_query("INSERT INTO IntegStudent (StudentID, Name, GPA) VALUES (1, 'Alice', 3.8);");
+    env.qp.execute_query("INSERT INTO IntegStudent (StudentID, Name, GPA) VALUES (2, 'Bob', 3.2);");
+    env.qp.execute_query("INSERT INTO IntegStudent (StudentID, Name, GPA) VALUES (3, 'Charlie', 3.5);");
+    
+    std::string sql = "UPDATE IntegStudent SET GPA = 4.0 WHERE GPA > 3.3;";
+    std::cout << "  SQL: " << sql << "\n";
+    
+    auto result = env.qp.execute_query(sql);
+    print_execution_result(result);
+    
+    if (!result.success || result.affected_rows != 2) {
+        std::cerr << "[FAIL] UPDATE should affect 2 rows, got " << result.affected_rows << "\n";
+        return false;
+    }
+    
+    std::cout << "[PASS] Integration - UPDATE multiple rows\n";
+    return true;
+}
+
+bool test_integration_delete_single_row() {
+    std::cout << "\n=== TEST 40: Integration - DELETE single row ===" << std::endl;
+    IntegrationTestSetup env;
+    
+    env.qp.execute_query("CREATE TABLE IntegStudent (StudentID INTEGER PRIMARY KEY, Name VARCHAR(50), GPA FLOAT);");
+    env.qp.execute_query("INSERT INTO IntegStudent (StudentID, Name, GPA) VALUES (1, 'Alice', 3.8);");
+    env.qp.execute_query("INSERT INTO IntegStudent (StudentID, Name, GPA) VALUES (2, 'Bob', 3.2);");
+    
+    std::string sql = "DELETE FROM IntegStudent WHERE StudentID = 1;";
+    std::cout << "  SQL: " << sql << "\n";
+    
+    auto result = env.qp.execute_query(sql);
+    print_execution_result(result);
+    
+    if (!result.success || result.affected_rows != 1) {
+        std::cerr << "[FAIL] DELETE should affect 1 row\n";
+        return false;
+    }
+    
+    auto verify = env.qp.execute_query("SELECT * FROM IntegStudent;");
+    if (verify.data.rows_count != 1) {
+        std::cerr << "[FAIL] Should have 1 row remaining\n";
+        return false;
+    }
+    
+    std::cout << "[PASS] Integration - DELETE single row\n";
+    return true;
+}
+
+bool test_integration_delete_with_condition() {
+    std::cout << "\n=== TEST 41: Integration - DELETE with condition ===" << std::endl;
+    IntegrationTestSetup env;
+    
+    env.qp.execute_query("CREATE TABLE IntegStudent (StudentID INTEGER PRIMARY KEY, Name VARCHAR(50), GPA FLOAT);");
+    env.qp.execute_query("INSERT INTO IntegStudent (StudentID, Name, GPA) VALUES (1, 'Alice', 3.8);");
+    env.qp.execute_query("INSERT INTO IntegStudent (StudentID, Name, GPA) VALUES (2, 'Bob', 2.5);");
+    env.qp.execute_query("INSERT INTO IntegStudent (StudentID, Name, GPA) VALUES (3, 'Charlie', 2.8);");
+    env.qp.execute_query("INSERT INTO IntegStudent (StudentID, Name, GPA) VALUES (4, 'Diana', 3.5);");
+    
+    std::string sql = "DELETE FROM IntegStudent WHERE GPA < 3.0;";
+    std::cout << "  SQL: " << sql << "\n";
+    
+    auto result = env.qp.execute_query(sql);
+    print_execution_result(result);
+    
+    if (!result.success || result.affected_rows != 2) {
+        std::cerr << "[FAIL] DELETE should affect 2 rows, got " << result.affected_rows << "\n";
+        return false;
+    }
+    
+    auto verify = env.qp.execute_query("SELECT * FROM IntegStudent;");
+    if (verify.data.rows_count != 2) {
+        std::cerr << "[FAIL] Should have 2 rows remaining\n";
+        return false;
+    }
+    
+    std::cout << "[PASS] Integration - DELETE with condition\n";
+    return true;
+}
+
+bool test_integration_drop_table() {
+    std::cout << "\n=== TEST 42: Integration - DROP TABLE ===" << std::endl;
+    IntegrationTestSetup env;
+    
+    env.qp.execute_query("CREATE TABLE IntegStudent (StudentID INTEGER PRIMARY KEY, Name VARCHAR(50), GPA FLOAT);");
+    env.qp.execute_query("INSERT INTO IntegStudent (StudentID, Name, GPA) VALUES (1, 'Alice', 3.8);");
+    
+    std::string sql = "DROP TABLE IntegStudent;";
+    std::cout << "  SQL: " << sql << "\n";
+    
+    auto result = env.qp.execute_query(sql);
+    print_execution_result(result);
+    
+    if (!result.success) {
+        std::cerr << "[FAIL] DROP TABLE failed\n";
+        return false;
+    }
+    
+    auto verify = env.qp.execute_query("SELECT * FROM IntegStudent;");
+    if (verify.success) {
+        std::cerr << "[FAIL] Table should not exist after DROP\n";
+        return false;
+    }
+    
+    std::cout << "[PASS] Integration - DROP TABLE\n";
+    return true;
+}
+
+bool test_integration_select_with_table_alias() {
+    std::cout << "\n=== TEST 43: Integration - SELECT with table alias (AS clause) ===" << std::endl;
+    IntegrationTestSetup env;
+    
+    env.qp.execute_query("CREATE TABLE IntegStudent (StudentID INTEGER PRIMARY KEY, Name VARCHAR(50), GPA FLOAT);");
+    env.qp.execute_query("INSERT INTO IntegStudent (StudentID, Name, GPA) VALUES (1, 'Alice', 3.8);");
+    env.qp.execute_query("INSERT INTO IntegStudent (StudentID, Name, GPA) VALUES (2, 'Bob', 3.2);");
+    
+    std::string sql = "SELECT s.Name, s.GPA FROM IntegStudent AS s WHERE s.GPA > 3.0;";
+    std::cout << "  SQL: " << sql << "\n";
+    
+    auto result = env.qp.execute_query(sql);
+    print_execution_result(result);
+    
+    if (!result.success) {
+        std::cerr << "[FAIL] SELECT with table alias failed: " << result.message << "\n";
+        return false;
+    }
+    
+    if (result.data.rows_count != 2) {
+        std::cerr << "[FAIL] Expected 2 rows, got " << result.data.rows_count << "\n";
+        return false;
+    }
+    
+    std::cout << "[PASS] Integration - SELECT with table alias (AS clause)\n";
+    return true;
+}
+
+bool test_integration_join_two_tables() {
+    std::cout << "\n=== TEST 44: Integration - JOIN two tables ===" << std::endl;
+    IntegrationTestSetup env;
+    
+    env.qp.execute_query("CREATE TABLE IntegStudent (StudentID INTEGER PRIMARY KEY, Name VARCHAR(50), DeptID INTEGER);");
+    env.qp.execute_query("CREATE TABLE IntegDepartment (DeptID INTEGER PRIMARY KEY, DeptName VARCHAR(50));");
+    
+    env.qp.execute_query("INSERT INTO IntegStudent (StudentID, Name, DeptID) VALUES (1, 'Alice', 1);");
+    env.qp.execute_query("INSERT INTO IntegStudent (StudentID, Name, DeptID) VALUES (2, 'Bob', 2);");
+    env.qp.execute_query("INSERT INTO IntegStudent (StudentID, Name, DeptID) VALUES (3, 'Charlie', 1);");
+    
+    env.qp.execute_query("INSERT INTO IntegDepartment (DeptID, DeptName) VALUES (1, 'Computer Science');");
+    env.qp.execute_query("INSERT INTO IntegDepartment (DeptID, DeptName) VALUES (2, 'Mathematics');");
+    
+    std::string sql = "SELECT s.Name, d.DeptName FROM IntegStudent s INNER JOIN IntegDepartment d ON s.DeptID = d.DeptID;";
+    std::cout << "  SQL: " << sql << "\n";
+    
+    auto result = env.qp.execute_query(sql);
+    print_execution_result(result);
+    
+    if (!result.success) {
+        std::cerr << "[FAIL] JOIN failed: " << result.message << "\n";
+        return false;
+    }
+    
+    if (result.data.rows_count != 3) {
+        std::cerr << "[FAIL] Expected 3 rows from JOIN, got " << result.data.rows_count << "\n";
+        return false;
+    }
+    
+    std::cout << "[PASS] Integration - JOIN two tables\n";
+    return true;
+}
+
+bool test_integration_natural_join() {
+    std::cout << "\n=== TEST 45: Integration - NATURAL JOIN ===" << std::endl;
+    IntegrationTestSetup env;
+    
+    env.qp.execute_query("CREATE TABLE IntegStudent (StudentID INTEGER PRIMARY KEY, Name VARCHAR(50), DeptID INTEGER);");
+    env.qp.execute_query("CREATE TABLE IntegDepartment (DeptID INTEGER PRIMARY KEY, DeptName VARCHAR(50));");
+    
+    env.qp.execute_query("INSERT INTO IntegStudent (StudentID, Name, DeptID) VALUES (1, 'Alice', 1);");
+    env.qp.execute_query("INSERT INTO IntegStudent (StudentID, Name, DeptID) VALUES (2, 'Bob', 2);");
+    
+    env.qp.execute_query("INSERT INTO IntegDepartment (DeptID, DeptName) VALUES (1, 'CS');");
+    env.qp.execute_query("INSERT INTO IntegDepartment (DeptID, DeptName) VALUES (2, 'Math');");
+    
+    std::string sql = "SELECT * FROM IntegStudent NATURAL JOIN IntegDepartment;";
+    std::cout << "  SQL: " << sql << "\n";
+    
+    auto result = env.qp.execute_query(sql);
+    print_execution_result(result);
+    
+    if (!result.success) {
+        std::cerr << "[FAIL] NATURAL JOIN failed: " << result.message << "\n";
+        return false;
+    }
+    
+    if (result.data.rows_count != 2) {
+        std::cerr << "[FAIL] Expected 2 rows from NATURAL JOIN, got " << result.data.rows_count << "\n";
+        return false;
+    }
+    
+    std::cout << "[PASS] Integration - NATURAL JOIN\n";
+    return true;
+}
+
 int main() {
     std::cout << "===================================" << std::endl;
     std::cout << "  Query Processor Tests" << std::endl;
     std::cout << "===================================" << std::endl;
 
     int passed = 0;
-    int total = 28;
+    int total = 45;
 
+    // Original unit tests (1-28)
     if (test_basic_integration()) passed++;
     if (test_begin_transaction()) passed++;
     if (test_limit()) passed++;
@@ -1644,6 +2137,26 @@ int main() {
     if (test_table_alias_basic()) passed++;
     if (test_table_alias_with_where()) passed++;
     if (test_table_alias_with_aliased_column_ref()) passed++;
+
+    // Integration tests using execute_query() with SQL strings (29-45)
+    
+    if (test_integration_create_table()) passed++;
+    if (test_integration_insert_single_row()) passed++;
+    if (test_integration_insert_multiple_rows()) passed++;
+    if (test_integration_insert_pk_violation()) passed++;
+    if (test_integration_select_all()) passed++;
+    if (test_integration_select_with_where()) passed++;
+    if (test_integration_select_with_order_by()) passed++;
+    if (test_integration_select_with_limit()) passed++;
+    if (test_integration_select_combined()) passed++;
+    if (test_integration_update_single_row()) passed++;
+    if (test_integration_update_multiple_rows()) passed++;
+    if (test_integration_delete_single_row()) passed++;
+    if (test_integration_delete_with_condition()) passed++;
+    if (test_integration_drop_table()) passed++;
+    if (test_integration_select_with_table_alias()) passed++;
+    if (test_integration_join_two_tables()) passed++;
+    if (test_integration_natural_join()) passed++;
 
     std::cout << "\n========================================" << std::endl;
     std::cout << "  Results: " << passed << "/" << total << " tests passed" << std::endl;
