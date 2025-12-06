@@ -1254,12 +1254,14 @@ Rows<Row> QueryProcessor::apply_table_aliases(const Rows<Row>& rows, const std::
                                                const std::map<std::string, std::string>& table_aliases) {
     Rows<Row> result;
     
-    // Find the alias for this table (if any)
     std::string alias = "";
     for (const auto& pair : table_aliases) {
         if (pair.second == table_name) {
-            alias = pair.first;
-            break;
+            // Prefer explicit alias over table name itself
+            if (pair.first != table_name) {
+                alias = pair.first;
+                break;
+            }
         }
     }
     
