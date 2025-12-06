@@ -1340,7 +1340,7 @@ std::string QueryProcessor::resolve_aliased_column(const std::string& column,
         std::string col_name = column.substr(dot_pos + 1);
         
         if (table_aliases.find(prefix) != table_aliases.end()) {
-            return col_name;  // Return just the column name
+            return table_aliases.at(prefix) + "." + col_name;  // Return TableName.ColumnName
         }
     }
     return column;  // Return original if no alias prefix
