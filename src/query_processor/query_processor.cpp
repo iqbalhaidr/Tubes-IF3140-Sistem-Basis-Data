@@ -829,6 +829,61 @@ int QueryProcessor::execute_insert(const mdbms::qo::ParsedQuery& parsed_query, i
                 throw std::runtime_error("Concurrency control denied WRITE access for table " + table_name);
             }
         }
+        // Check primary key uniqueness
+        if (!schema.primary_key.empty()) {
+            // Find which index in insert_columns/insert_values corresponds to primary key
+            std::vector<std::string> temp_column_names;
+            if (!parsed_query.insert_columns.empty()) {
+                temp_column_names = parsed_query.insert_columns;
+            } else {
+                temp_column_names = mdbms::sm::StorageEngine::get_instance().get_column_names(table_name);
+            }
+            
+            // Find primary key value in the values being inserted
+            std::any pk_value;
+            bool pk_found = false;
+            for (size_t i = 0; i < temp_column_names.size() && i < parsed_query.insert_values.size(); ++i) {
+                if (temp_column_names[i] == schema.primary_key) {
+                    pk_value = parsed_query.insert_values[i];
+                    pk_found = true;
+                    break;
+                }
+            }
+            
+            if (pk_found && pk_value.has_value()) {
+                // Read existing rows to check for duplicate primary key
+                DataRetrieval retrieval;
+                retrieval.table = table_name;
+                retrieval.columns = {schema.primary_key};
+                retrieval.search_type = SearchType::LINEAR;
+                Rows<Row> existing_rows = mdbms::sm::StorageEngine::get_instance().read_block(retrieval);
+                
+                for (const auto& row : existing_rows.data) {
+                    auto it = row.columns.find(schema.primary_key);
+                    if (it != row.columns.end()) {
+                        bool is_duplicate = false;
+                        try {
+                            // Compare based on type
+                            if (pk_value.type() == typeid(int) && it->second.type() == typeid(int)) {
+                                is_duplicate = (std::any_cast<int>(pk_value) == std::any_cast<int>(it->second));
+                            } else if (pk_value.type() == typeid(std::string) && it->second.type() == typeid(std::string)) {
+                                is_duplicate = (std::any_cast<std::string>(pk_value) == std::any_cast<std::string>(it->second));
+                            } else if (pk_value.type() == typeid(float) && it->second.type() == typeid(float)) {
+                                is_duplicate = (std::any_cast<float>(pk_value) == std::any_cast<float>(it->second));
+                            }
+                        } catch (const std::bad_any_cast&) {
+                            // Type mismatch, not a duplicate
+                        }
+                        
+                        if (is_duplicate) {
+                            throw std::runtime_error("Duplicate entry for primary key '" + schema.primary_key + 
+                                                   "'. Primary key constraint violated.");
+                        }
+                    }
+                }
+                std::cout << "[DEBUG] QP INSERT: Primary key uniqueness check passed" << std::endl;
+            }
+        }
 
         // Get column names for mapping values
         std::vector<std::string> column_names;
