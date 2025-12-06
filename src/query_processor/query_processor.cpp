@@ -103,13 +103,9 @@ ExecutionResult QueryProcessor::execute_query(const std::string& query) {
             throw std::runtime_error("Unsupported query type: " + query_type);
         }
 
-        // Log to Failure Recovery Manager
-        if (result.success) {
-            mdbms::fr::FailureRecoveryManager::get_instance().write_log(result);
-        }
-
         // Auto-commit queries only if transaction was auto-started (not explicitly started with BEGIN)
         if (!explicit_transaction_started) {
+            mdbms::fr::FailureRecoveryManager::get_instance().commit_transaction(result.transaction_id);
             mdbms::ccm::ConcurrencyControlManager::get_instance().end_transaction(result.transaction_id);
             current_transaction_id = -1;
         }
@@ -359,105 +355,117 @@ Rows<Row> QueryProcessor::apply_where_clause(const Rows<Row>& rows, const std::v
         return {false, ""};
     };
 
+    auto evaluate_condition = [&](const Row& row, const Condition& cond) -> bool {
+        // Find left side column value
+        auto [left_found, left_val] = find_column_value(row, cond.column);
+        if (!left_found) {
+            return false;
+        }
+
+        // Check if operand is a column reference (for column-to-column comparison)
+        auto [is_col_ref, col_ref_name] = is_column_reference(cond.operand);
+
+        std::any compare_val;
+        if (is_col_ref) {
+            // Column-to-column comparison
+            auto [right_found, right_val] = find_column_value(row, col_ref_name);
+            if (!right_found) {
+                return false;
+            }
+            compare_val = right_val;
+        } else {
+            // Regular literal comparison
+            compare_val = cond.operand;
+        }
+
+        bool condition_met = false;
+
+        try {
+            // Compare integer
+            if (left_val.type() == typeid(int)) {
+                int row_val = std::any_cast<int>(left_val);
+                int cond_val = 0;
+
+                if (compare_val.type() == typeid(int)) {
+                    cond_val = std::any_cast<int>(compare_val);
+                } else if (compare_val.type() == typeid(float)) {
+                    cond_val = static_cast<int>(std::any_cast<float>(compare_val));
+                } else if (compare_val.type() == typeid(double)) {
+                    cond_val = static_cast<int>(std::any_cast<double>(compare_val));
+                }
+
+                if (cond.operation == "=") condition_met = (row_val == cond_val);
+                else if (cond.operation == "<>" || cond.operation == "!=") condition_met = (row_val != cond_val);
+                else if (cond.operation == ">") condition_met = (row_val > cond_val);
+                else if (cond.operation == ">=") condition_met = (row_val >= cond_val);
+                else if (cond.operation == "<") condition_met = (row_val < cond_val);
+                else if (cond.operation == "<=") condition_met = (row_val <= cond_val);
+            }
+            // Compare float
+            else if (left_val.type() == typeid(float)) {
+                float row_val = std::any_cast<float>(left_val);
+                float cond_val = 0.0f;
+
+                if (compare_val.type() == typeid(float)) {
+                    cond_val = std::any_cast<float>(compare_val);
+                } else if (compare_val.type() == typeid(int)) {
+                    cond_val = static_cast<float>(std::any_cast<int>(compare_val));
+                } else if (compare_val.type() == typeid(double)) {
+                    cond_val = static_cast<float>(std::any_cast<double>(compare_val));
+                }
+
+                if (cond.operation == "=") condition_met = (row_val == cond_val);
+                else if (cond.operation == "<>" || cond.operation == "!=") condition_met = (row_val != cond_val);
+                else if (cond.operation == ">") condition_met = (row_val > cond_val);
+                else if (cond.operation == ">=") condition_met = (row_val >= cond_val);
+                else if (cond.operation == "<") condition_met = (row_val < cond_val);
+                else if (cond.operation == "<=") condition_met = (row_val <= cond_val);
+            }
+            // Compare string
+            else if (left_val.type() == typeid(std::string)) {
+                std::string row_val = std::any_cast<std::string>(left_val);
+                std::string cond_val;
+
+                if (compare_val.type() == typeid(std::string)) {
+                    cond_val = std::any_cast<std::string>(compare_val);
+                }
+
+                if (cond.operation == "=") condition_met = (row_val == cond_val);
+                else if (cond.operation == "<>" || cond.operation == "!=") condition_met = (row_val != cond_val);
+                else if (cond.operation == ">") condition_met = (row_val > cond_val);
+                else if (cond.operation == ">=") condition_met = (row_val >= cond_val);
+                else if (cond.operation == "<") condition_met = (row_val < cond_val);
+                else if (cond.operation == "<=") condition_met = (row_val <= cond_val);
+            }
+        } catch (const std::bad_any_cast& e) {
+            std::cerr << "QP: Type mismatch in WHERE clause for column " << cond.column << std::endl;
+            condition_met = false;
+        }
+
+        return condition_met;
+    };
+
+    // Evaluate conditions with OR/AND logic
     for (const auto& row : rows.data) {
-        bool matches_all = true;
+        if (conditions.empty()) {
+            result.data.push_back(row);
+            continue;
+        }
 
-        for (const auto& cond : conditions) {
-            // Find left side column value
-            auto [left_found, left_val] = find_column_value(row, cond.column);
-            if (!left_found) {
-                matches_all = false;
-                break;
-            }
+        bool overall_result = evaluate_condition(row, conditions[0]);
 
-            // Check if operand is a column reference (for column-to-column comparison)
-            auto [is_col_ref, col_ref_name] = is_column_reference(cond.operand);
 
-            std::any compare_val;
-            if (is_col_ref) {
-                // Column-to-column comparison (e.g., WHERE Item.CatID = Category.CatID)
-                auto [right_found, right_val] = find_column_value(row, col_ref_name);
-                if (!right_found) {
-                    matches_all = false;
-                    break;
-                }
-                compare_val = right_val;
-            } else {
-                // Regular literal comparison
-                compare_val = cond.operand;
-            }
+        for (size_t i = 1; i < conditions.size(); ++i) {
+            bool current_result = evaluate_condition(row, conditions[i]);
 
-            bool condition_met = false;
-
-            try {
-                // Compare integer
-                if (left_val.type() == typeid(int)) {
-                    int row_val = std::any_cast<int>(left_val);
-                    int cond_val = 0;
-
-                    if (compare_val.type() == typeid(int)) {
-                        cond_val = std::any_cast<int>(compare_val);
-                    } else if (compare_val.type() == typeid(float)) {
-                        cond_val = static_cast<int>(std::any_cast<float>(compare_val));
-                    } else if (compare_val.type() == typeid(double)) {
-                        cond_val = static_cast<int>(std::any_cast<double>(compare_val));
-                    }
-
-                    if (cond.operation == "=") condition_met = (row_val == cond_val);
-                    else if (cond.operation == "<>" || cond.operation == "!=") condition_met = (row_val != cond_val);
-                    else if (cond.operation == ">") condition_met = (row_val > cond_val);
-                    else if (cond.operation == ">=") condition_met = (row_val >= cond_val);
-                    else if (cond.operation == "<") condition_met = (row_val < cond_val);
-                    else if (cond.operation == "<=") condition_met = (row_val <= cond_val);
-                }
-                // Compare float
-                else if (left_val.type() == typeid(float)) {
-                    float row_val = std::any_cast<float>(left_val);
-                    float cond_val = 0.0f;
-
-                    if (compare_val.type() == typeid(float)) {
-                        cond_val = std::any_cast<float>(compare_val);
-                    } else if (compare_val.type() == typeid(int)) {
-                        cond_val = static_cast<float>(std::any_cast<int>(compare_val));
-                    } else if (compare_val.type() == typeid(double)) {
-                        cond_val = static_cast<float>(std::any_cast<double>(compare_val));
-                    }
-
-                    if (cond.operation == "=") condition_met = (row_val == cond_val);
-                    else if (cond.operation == "<>" || cond.operation == "!=") condition_met = (row_val != cond_val);
-                    else if (cond.operation == ">") condition_met = (row_val > cond_val);
-                    else if (cond.operation == ">=") condition_met = (row_val >= cond_val);
-                    else if (cond.operation == "<") condition_met = (row_val < cond_val);
-                    else if (cond.operation == "<=") condition_met = (row_val <= cond_val);
-                }
-                // Compare string
-                else if (left_val.type() == typeid(std::string)) {
-                    std::string row_val = std::any_cast<std::string>(left_val);
-                    std::string cond_val;
-
-                    if (compare_val.type() == typeid(std::string)) {
-                        cond_val = std::any_cast<std::string>(compare_val);
-                    }
-
-                    if (cond.operation == "=") condition_met = (row_val == cond_val);
-                    else if (cond.operation == "<>" || cond.operation == "!=") condition_met = (row_val != cond_val);
-                    else if (cond.operation == ">") condition_met = (row_val > cond_val);
-                    else if (cond.operation == ">=") condition_met = (row_val >= cond_val);
-                    else if (cond.operation == "<") condition_met = (row_val < cond_val);
-                    else if (cond.operation == "<=") condition_met = (row_val <= cond_val);
-                }
-            } catch (const std::bad_any_cast& e) {
-                std::cerr << "QP: Type mismatch in WHERE clause for column " << cond.column << std::endl;
-                condition_met = false;
-            }
-
-            if (!condition_met) {
-                matches_all = false;
-                break;
+            if (conditions[i - 1].logical_operator == "OR") {
+                overall_result = overall_result || current_result;
+            } else { 
+                overall_result = overall_result && current_result;
             }
         }
 
-        if (matches_all) {
+        if (overall_result) {
             result.data.push_back(row);
         }
     }

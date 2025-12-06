@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <sstream>
+#include <cstdio>
 #include <filesystem>
 #include "failure_recovery.h"
 
@@ -66,7 +67,20 @@ FailureRecoveryManager::FailureRecoveryManager()
     std::cout << "FRM: Konstruktor FailureRecoveryManager dipanggil..." << std::endl;
     std::cout << "FRM: Log file path: " << this->log_file_path << std::endl;
 
-    recover_from_crash();
+    // Check if previous shutdown was abnormal (crash)
+    std::string crash_marker = "data/.running";
+    bool was_crash = std::filesystem::exists(crash_marker);
+    
+    if (was_crash) {
+        std::cout << "FRM: Detected abnormal shutdown - performing crash recovery..." << std::endl;
+        recover_from_crash();
+    } else {
+        std::cout << "FRM: Normal startup - no crash recovery needed." << std::endl;
+    }
+    
+    // Create marker file to indicate system is running
+    std::ofstream marker(crash_marker);
+    marker.close();
 
     std::vector<LogEntry> existing = read_all_logs(this->log_file_path);
     if (!existing.empty()) {
@@ -87,6 +101,13 @@ FailureRecoveryManager::~FailureRecoveryManager() {
     if (checkpoint_thread_.joinable()) {
         checkpoint_thread_.join();
         std::cout << "FRM: Periodic checkpoint thread stopped" << std::endl;
+    }
+    
+    // Remove crash marker to indicate clean shutdown
+    std::string crash_marker = "data/.running";
+    if (std::filesystem::exists(crash_marker)) {
+        std::filesystem::remove(crash_marker);
+        std::cout << "FRM: Clean shutdown - crash marker removed" << std::endl;
     }
     
     save_checkpoint();
@@ -243,17 +264,53 @@ void FailureRecoveryManager::abort_transaction(int transaction_id) {
 
     std::cout << "FRM: Aborting transaction " << transaction_id << "..." << std::endl;
     
-    // clear buffer
-    // harusnya clear buffer hanya untuk transaksi yang diabort (tpi skrng masih clear semua)
-    std::cout << "FRM: Discarding uncommitted buffer pages..." << std::endl;
-    sm::StorageEngine::get_instance().clear_buffer_for_testing(); 
+    // Check if transaction has any data modifications
+    bool has_data_modifications = false;
+    {
+        std::lock_guard<std::mutex> lock(this->mtx);
+        
+        // Check log buffer first
+        for (const auto& entry : this->log_buffer) {
+            if (entry.transaction_id == transaction_id && 
+                (entry.operation == Operation::INSERT || 
+                 entry.operation == Operation::UPDATE || 
+                 entry.operation == Operation::DELETE)) {
+                has_data_modifications = true;
+                break;
+            }
+        }
+        
+        // If not found in buffer, check persisted logs
+        if (!has_data_modifications) {
+            std::vector<LogEntry> all_logs = read_all_logs(this->log_file_path);
+            for (const auto& entry : all_logs) {
+                if (entry.transaction_id == transaction_id && 
+                    (entry.operation == Operation::INSERT || 
+                     entry.operation == Operation::UPDATE || 
+                     entry.operation == Operation::DELETE)) {
+                    has_data_modifications = true;
+                    break;
+                }
+            }
+        }
+    }
     
-    // undo dari log untuk data yang sudah diflush ke disk
-    std::cout << "FRM: Performing UNDO from log..." << std::endl;
-    RecoverCriteria criteria;
-    criteria.transaction_id = transaction_id;
-    criteria.use_timestamp = false;
-    recover(criteria);
+    // Only perform UNDO if there are actual data modifications
+    if (has_data_modifications) {
+        // IMPORTANT: Don't clear entire buffer - it contains data from other transactions!
+        // Instead, just UNDO the operations from this transaction using the log
+        std::cout << "FRM: Performing UNDO from log..." << std::endl;
+        RecoverCriteria criteria;
+        criteria.transaction_id = transaction_id;
+        criteria.use_timestamp = false;
+        recover(criteria);
+        
+        // Flush buffer pages to ensure UNDO changes are persisted
+        std::cout << "FRM: Flushing UNDO changes to disk..." << std::endl;
+        sm::StorageEngine::get_instance().checkpoint();
+    } else {
+        std::cout << "FRM: No data modifications found, skip UNDO process." << std::endl;
+    }
     
     // tulis abort log entry ke buffer
     std::lock_guard<std::mutex> lock(this->mtx);
@@ -992,6 +1049,11 @@ bool FailureRecoveryManager::undo_operation(const LogEntry& entry) {
                 write.conditions = conditions;
                 write.is_insert = false;
                 
+                // Set columns to update (all columns from old_value)
+                for (const auto& [col_name, val] : entry.old_value.columns) {
+                    write.columns.push_back(col_name);
+                }
+                
                 int updated = sm::StorageEngine::get_instance().write_block(write);
                 std::cout << "FRM: Berhasil mengembalikan " << updated << " row ke nilai lama" << std::endl;
                 
@@ -1053,7 +1115,13 @@ bool FailureRecoveryManager::redo_operation(const LogEntry& entry) {
                 write.table = entry.table_name;
                 write.new_value = entry.new_value;
                 write.is_insert = true;
-                sm::StorageEngine::get_instance().write_block(write);
+                int inserted = sm::StorageEngine::get_instance().write_block(write);
+                
+                if (inserted <= 0) {
+                    std::cerr << "FRM Warning: REDO INSERT failed for table " << entry.table_name 
+                              << " (row may already exist)" << std::endl;
+                }
+                
                 return true;
             }
             case Operation::DELETE: {
@@ -1091,6 +1159,12 @@ bool FailureRecoveryManager::redo_operation(const LogEntry& entry) {
                 write.new_value = entry.new_value;
                 write.conditions = conditions;
                 write.is_insert = false;
+                
+                // Set columns to update (all columns from new_value)
+                for (const auto& [col_name, val] : entry.new_value.columns) {
+                    write.columns.push_back(col_name);
+                }
+                
                 sm::StorageEngine::get_instance().write_block(write);
                 return true;
             }
@@ -1263,8 +1337,19 @@ void FailureRecoveryManager::recover_from_crash() {
         std::cout << "FRM: Fase UNDO selesai. Total operasi yang di-UNDO: " << undo_count << std::endl;
     }
     
-    // debugger
-    std::cout << "\nFRM: Recovery dari crash selesai." << std::endl;
+    // Flush recovered data to disk
+    std::cout << "\nFRM: Flushing recovered data to disk..." << std::endl;
+    sm::StorageEngine::get_instance().checkpoint();
+    
+    // CRITICAL: Remove .running marker to prevent re-recovery on next restart
+    std::string running_marker = "data/.running";
+    if (std::remove(running_marker.c_str()) == 0) {
+        std::cout << "FRM: Removed crash marker file (.running)" << std::endl;
+    } else {
+        std::cerr << "FRM Warning: Failed to remove .running marker file" << std::endl;
+    }
+    
+    std::cout << "FRM: Recovery dari crash selesai." << std::endl;
 }
 
 void FailureRecoveryManager::flush_buffer() {

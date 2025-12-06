@@ -330,12 +330,60 @@ Condition parse_condition(const std::string& raw_condition) {
 
 std::vector<Condition> parse_conditions(const std::string& clause) {
     std::vector<Condition> conditions;
-    for (const auto& raw_condition : split_on_keyword(clause, "AND")) {
-        if (raw_condition.empty()) {
-            continue;
+
+    // Split on both AND and OR, preserving which operator was used
+    std::string remaining = clause;
+    std::string upper_clause = to_upper(clause);
+
+    while (!remaining.empty()) {
+        std::string current_condition;
+        std::string next_operator = "AND";  // default
+
+        // Find positions of next AND and OR
+        size_t and_pos = upper_clause.find(" AND ");
+        size_t or_pos = upper_clause.find(" OR ");
+
+        // Determine which comes first
+        size_t split_pos = std::string::npos;
+        if (and_pos != std::string::npos && or_pos != std::string::npos) {
+            if (and_pos < or_pos) {
+                split_pos = and_pos;
+                next_operator = "AND";
+            } else {
+                split_pos = or_pos;
+                next_operator = "OR";
+            }
+        } else if (and_pos != std::string::npos) {
+            split_pos = and_pos;
+            next_operator = "AND";
+        } else if (or_pos != std::string::npos) {
+            split_pos = or_pos;
+            next_operator = "OR";
         }
-        conditions.push_back(parse_condition(raw_condition));
+
+        // Extract current condition
+        if (split_pos != std::string::npos) {
+            current_condition = remaining.substr(0, split_pos);
+            // Update remaining string (skip the operator)
+            size_t operator_len = (next_operator == "AND") ? 5 : 4;  
+            remaining = remaining.substr(split_pos + operator_len);
+            upper_clause = to_upper(remaining);
+        } else {
+            // Last condition
+            current_condition = remaining;
+            remaining.clear();
+            next_operator = "AND"; 
+        }
+
+        // Parse the condition and set its logical operator
+        current_condition = trim(current_condition);
+        if (!current_condition.empty()) {
+            Condition cond = parse_condition(current_condition);
+            cond.logical_operator = next_operator;
+            conditions.push_back(cond);
+        }
     }
+
     return conditions;
 }
 
