@@ -397,8 +397,8 @@ int StorageEngine::delete_block(const DataDeletion& deletion) {
         buffer_manager_.unpin_page(table, page_id, page_modified);
     }
 
-    // Flush all pages to ensure deletion is persisted
-    buffer_manager_.flush_all();
+    // Don't flush here - let checkpoint/eviction handle it
+    // Premature flush resets dirty flag and breaks recovery
 
     std::cout << "[DEBUG] SM delete_block: Deleted " << affected_rows << " rows" << std::endl;
     return affected_rows;
